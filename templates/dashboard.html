@@ -171,6 +171,12 @@
             margin-bottom: 2px;
         }
         
+        .donor-location {
+            font-size: 12px;
+            color: #7f8c8d;
+            font-style: italic;
+        }
+        
         .donor-details {
             font-size: 12px;
             color: #7f8c8d;
@@ -296,6 +302,9 @@
                         <tr>
                             <td>
                                 <div class="donor-name">{{ donor.name }}</div>
+                                {% if donor.city or donor.state %}
+                                <div class="donor-location">{{ donor.city }}{% if donor.city and donor.state %}, {% endif %}{{ donor.state }}</div>
+                                {% endif %}
                             </td>
                             <td>${{ "%.2f"|format(donor.amount) }}</td>
                             <td class="positive">→ New</td>
@@ -332,6 +341,9 @@
                         <tr>
                             <td>
                                 <div class="donor-name">{{ donor.name }}</div>
+                                {% if donor.city or donor.state %}
+                                <div class="donor-location">{{ donor.city }}{% if donor.city and donor.state %}, {% endif %}{{ donor.state }}</div>
+                                {% endif %}
                             </td>
                             <td>${{ "%.2f"|format(donor.amount) }}</td>
                             <td class="{{ 'positive' if donor.change_amount > 0 else 'negative' }}">
@@ -370,6 +382,9 @@
                         <tr>
                             <td>
                                 <div class="donor-name">{{ donor.name }}</div>
+                                {% if donor.city or donor.state %}
+                                <div class="donor-location">{{ donor.city }}{% if donor.city and donor.state %}, {% endif %}{{ donor.state }}</div>
+                                {% endif %}
                             </td>
                             <td class="negative">$0.00</td>
                             <td class="negative">↘ -${{ "%.0f"|format(donor.expected_amount) }}</td>
@@ -404,6 +419,9 @@
                         <tr>
                             <td>
                                 <div class="donor-name">{{ donor.name }}</div>
+                                {% if donor.city or donor.state %}
+                                <div class="donor-location">{{ donor.city }}{% if donor.city and donor.state %}, {% endif %}{{ donor.state }}</div>
+                                {% endif %}
                             </td>
                             <td>${{ "%.2f"|format(donor.amount) }}</td>
                             <td class="neutral">
