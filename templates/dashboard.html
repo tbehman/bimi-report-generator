@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>BIMI Dashboard</title>
+    <style>
+        body { font-family: Arial, sans-serif; max-width: 800px; margin: 0 auto; padding: 20px; }
+        .metrics { background: #f8f9fa; padding: 20px; border-radius: 8px; margin: 20px 0; }
+        .month-table { width: 100%; border-collapse: collapse; margin: 20px 0; }
+        .month-table th, .month-table td { padding: 12px; text-align: left; border-bottom: 1px solid #ddd; }
+        .month-table th { background: #2c3e50; color: white; }
+        .positive { color: #27ae60; }
+        .negative { color: #e74c3c; }
+    </style>
+</head>
+<body>
+    <h1>BIMI Giving Report</h1>
+    
+    {% if current_month %}
+    <div class="metrics">
+        <h3>Current Month: {{ current_month.month }}</h3>
+        <p><strong>Gross Donations:</strong> ${{ "%.2f"|format(current_month.gross_donations) }}</p>
+        <p><strong>6-Month Average:</strong> ${{ "%.2f"|format(average_gross) }}</p>
+        <p><strong>Vs Average:</strong> 
+            <span class="{% if current_month.gross_donations >= average_gross %}positive{% else %}negative{% endif %}">
+                ${{ "%.2f"|format(current_month.gross_donations - average_gross) }} 
+                {% if average_gross > 0 %}
+                ({{ "%.1f"|format((current_month.gross_donations - average_gross) / average_gross * 100) }}%)
+                {% else %}
+                (N/A)
+                {% endif %}
+            </span>
+        </p>
+    </div>
+    {% endif %}
+    
+    <h3>Last 6 Months</h3>
+    <table class="month-table">
+        <tr>
+            <th>Month</th>
+            <th>Gross Donations</th>
+            <th>Net Cash</th>
+        </tr>
+        {% for month in months_data %}
+        <tr>
+            <td>{{ month.month }}</td>
+            <td>${{ "%.2f"|format(month.gross_donations) }}</td>
+            <td>${{ "%.2f"|format(month.net_cash) }}</td>
+        </tr>
+        {% endfor %}
+    </table>
+    
+    <p><a href="/">Logout</a></p>
+</body>
+</html>
