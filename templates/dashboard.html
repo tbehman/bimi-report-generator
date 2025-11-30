@@ -1,54 +1,425 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-    <title>BIMI Dashboard</title>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>BIMI Dashboard - Financial Overview</title>
     <style>
-        body { font-family: Arial, sans-serif; max-width: 800px; margin: 0 auto; padding: 20px; }
-        .metrics { background: #f8f9fa; padding: 20px; border-radius: 8px; margin: 20px 0; }
-        .month-table { width: 100%; border-collapse: collapse; margin: 20px 0; }
-        .month-table th, .month-table td { padding: 12px; text-align: left; border-bottom: 1px solid #ddd; }
-        .month-table th { background: #2c3e50; color: white; }
-        .positive { color: #27ae60; }
-        .negative { color: #e74c3c; }
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: #f8f9fa;
+            color: #2c3e50;
+            line-height: 1.6;
+        }
+        
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        
+        .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 30px;
+            border-radius: 15px;
+            margin-bottom: 30px;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.1);
+        }
+        
+        .header h1 {
+            font-size: 28px;
+            font-weight: 600;
+            margin-bottom: 5px;
+        }
+        
+        .header p {
+            opacity: 0.9;
+            font-size: 16px;
+        }
+        
+        .logout-btn {
+            float: right;
+            background: rgba(255, 255, 255, 0.2);
+            color: white;
+            border: none;
+            padding: 8px 16px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 14px;
+            transition: background 0.3s ease;
+        }
+        
+        .logout-btn:hover {
+            background: rgba(255, 255, 255, 0.3);
+        }
+        
+        .summary-cards {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 20px;
+            margin-bottom: 30px;
+        }
+        
+        .card {
+            background: white;
+            padding: 25px;
+            border-radius: 12px;
+            box-shadow: 0 5px 15px rgba(0, 0, 0, 0.08);
+            text-align: center;
+        }
+        
+        .card h3 {
+            font-size: 14px;
+            color: #7f8c8d;
+            margin-bottom: 10px;
+            font-weight: 600;
+        }
+        
+        .card .number {
+            font-size: 32px;
+            font-weight: 700;
+            color: #2c3e50;
+        }
+        
+        .card .subtext {
+            font-size: 12px;
+            color: #7f8c8d;
+            margin-top: 5px;
+        }
+        
+        .section {
+            background: white;
+            padding: 30px;
+            border-radius: 12px;
+            box-shadow: 0 5px 15px rgba(0, 0, 0, 0.08);
+            margin-bottom: 30px;
+        }
+        
+        .section h2 {
+            font-size: 20px;
+            color: #2c3e50;
+            margin-bottom: 20px;
+            padding-bottom: 10px;
+            border-bottom: 2px solid #f1f3f4;
+        }
+        
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 15px;
+        }
+        
+        th {
+            background: #f8f9fa;
+            padding: 12px 15px;
+            text-align: left;
+            font-weight: 600;
+            color: #2c3e50;
+            border-bottom: 2px solid #e9ecef;
+        }
+        
+        td {
+            padding: 12px 15px;
+            border-bottom: 1px solid #e9ecef;
+        }
+        
+        tr:hover {
+            background: #f8f9fa;
+        }
+        
+        .positive {
+            color: #27ae60;
+            font-weight: 600;
+        }
+        
+        .negative {
+            color: #e74c3c;
+            font-weight: 600;
+        }
+        
+        .neutral {
+            color: #7f8c8d;
+        }
+        
+        .donor-category {
+            margin-bottom: 30px;
+        }
+        
+        .category-header {
+            display: flex;
+            align-items: center;
+            margin-bottom: 15px;
+            padding: 15px;
+            border-radius: 8px;
+            font-weight: 600;
+        }
+        
+        .new { background: #e8f5e8; color: #27ae60; }
+        .changed { background: #fff3cd; color: #f39c12; }
+        .missed { background: #fde8e8; color: #e74c3c; }
+        .normal { background: #e8f4fd; color: #3498db; }
+        
+        .donor-name {
+            font-weight: 600;
+            margin-bottom: 2px;
+        }
+        
+        .donor-details {
+            font-size: 12px;
+            color: #7f8c8d;
+        }
+        
+        .pattern {
+            font-size: 12px;
+            color: #7f8c8d;
+        }
+        
+        .confidence-high { color: #27ae60; }
+        .confidence-medium { color: #f39c12; }
+        .confidence-low { color: #e74c3c; }
+        
+        @media (max-width: 768px) {
+            .container {
+                padding: 10px;
+            }
+            
+            .header {
+                padding: 20px;
+            }
+            
+            .section {
+                padding: 20px;
+            }
+            
+            table {
+                font-size: 14px;
+            }
+            
+            th, td {
+                padding: 8px 10px;
+            }
+        }
     </style>
 </head>
 <body>
-    <h1>BIMI Giving Report</h1>
-    
-    {% if current_month %}
-    <div class="metrics">
-        <h3>Current Month: {{ current_month.month }}</h3>
-        <p><strong>Gross Donations:</strong> ${{ "%.2f"|format(current_month.gross_donations) }}</p>
-        <p><strong>6-Month Average:</strong> ${{ "%.2f"|format(average_gross) }}</p>
-        <p><strong>Vs Average:</strong> 
-            <span class="{% if current_month.gross_donations >= average_gross %}positive{% else %}negative{% endif %}">
-                ${{ "%.2f"|format(current_month.gross_donations - average_gross) }} 
-                {% if average_gross > 0 %}
-                ({{ "%.1f"|format((current_month.gross_donations - average_gross) / average_gross * 100) }}%)
-                {% else %}
-                (N/A)
-                {% endif %}
-            </span>
-        </p>
+    <div class="container">
+        <div class="header">
+            <a href="/logout" class="logout-btn">Log Out</a>
+            <h1>Missionary Financial Dashboard</h1>
+            <p>6-Month Overview & Donor Analytics</p>
+        </div>
+        
+        <!-- Summary Cards -->
+        <div class="summary-cards">
+            <div class="card">
+                <h3>6-MONTH AVERAGE</h3>
+                <div class="number">${{ "%.0f"|format(average_gross) }}</div>
+                <div class="subtext">Gross Donations</div>
+            </div>
+            
+            <div class="card">
+                <h3>CURRENT MONTH</h3>
+                <div class="number">
+                    {% if current_month %}
+                        ${{ "%.0f"|format(current_month.gross_donations) }}
+                    {% else %}
+                        $0
+                    {% endif %}
+                </div>
+                <div class="subtext">Gross Donations</div>
+            </div>
+            
+            <div class="card">
+                <h3>TOTAL DONORS</h3>
+                <div class="number">{{ total_donors }}</div>
+                <div class="subtext">This Month</div>
+            </div>
+        </div>
+        
+        <!-- 6-Month History -->
+        <div class="section">
+            <h2>📊 6-Month Giving History</h2>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Month</th>
+                        <th>Gross Donations</th>
+                        <th>Net Cash</th>
+                        <th>vs Average</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for month in months_data %}
+                    <tr>
+                        <td>{{ month.month }}</td>
+                        <td>${{ "%.2f"|format(month.gross_donations) }}</td>
+                        <td>${{ "%.2f"|format(month.net_cash) }}</td>
+                        <td class="{{ 'positive' if month.dollar_diff > 0 else 'negative' if month.dollar_diff < 0 else 'neutral' }}">
+                            {{ '▲' if month.dollar_diff > 0 else '▼' if month.dollar_diff < 0 else '→' }} 
+                            {{ "%+.1f"|format(month.percent_diff) }}% 
+                            ({{ '+' if month.dollar_diff > 0 else '' }}${{ "%.0f"|format(month.dollar_diff) }})
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        
+        <!-- Donor Analysis -->
+        <div class="section">
+            <h2>👥 Donor Activity Analysis</h2>
+            
+            <!-- New Donors -->
+            {% if new_donors %}
+            <div class="donor-category">
+                <div class="category-header new">
+                    🆕 NEW DONORS ({{ new_donors|length }})
+                </div>
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Donor</th>
+                            <th>Amount</th>
+                            <th>Change</th>
+                            <th>Giving Pattern</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for donor in new_donors %}
+                        <tr>
+                            <td>
+                                <div class="donor-name">{{ donor.name }}</div>
+                            </td>
+                            <td>${{ "%.2f"|format(donor.amount) }}</td>
+                            <td class="positive">→ New</td>
+                            <td class="pattern confidence-{{ donor.confidence|lower }}">
+                                {{ donor.frequency }} ({{ donor.confidence }})
+                                {% if donor.typical_amount > 0 %}
+                                @ ${{ "%.0f"|format(donor.typical_amount) }}
+                                {% endif %}
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            {% endif %}
+            
+            <!-- Changed Giving -->
+            {% if changed_donors %}
+            <div class="donor-category">
+                <div class="category-header changed">
+                    📈 CHANGED GIVING ({{ changed_donors|length }})
+                </div>
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Donor</th>
+                            <th>Amount</th>
+                            <th>Change</th>
+                            <th>Giving Pattern</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for donor in changed_donors %}
+                        <tr>
+                            <td>
+                                <div class="donor-name">{{ donor.name }}</div>
+                            </td>
+                            <td>${{ "%.2f"|format(donor.amount) }}</td>
+                            <td class="{{ 'positive' if donor.change_amount > 0 else 'negative' }}">
+                                {{ '↗' if donor.change_amount > 0 else '↘' }} 
+                                ${{ "%+.0f"|format(donor.change_amount) }} 
+                                ({{ "%+.0f"|format(donor.change_percent) }}%)
+                            </td>
+                            <td class="pattern confidence-{{ donor.confidence|lower }}">
+                                {{ donor.frequency }} ({{ donor.confidence }}) 
+                                @ ${{ "%.0f"|format(donor.typical_amount) }}
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            {% endif %}
+            
+            <!-- Missed Expected -->
+            {% if missed_donors %}
+            <div class="donor-category">
+                <div class="category-header missed">
+                    ❌ MISSED EXPECTED ({{ missed_donors|length }})
+                </div>
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Donor</th>
+                            <th>Amount</th>
+                            <th>Change</th>
+                            <th>Giving Pattern</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for donor in missed_donors %}
+                        <tr>
+                            <td>
+                                <div class="donor-name">{{ donor.name }}</div>
+                            </td>
+                            <td class="negative">$0.00</td>
+                            <td class="negative">↘ -${{ "%.0f"|format(donor.expected_amount) }}</td>
+                            <td class="pattern confidence-{{ donor.confidence|lower }}">
+                                {{ donor.frequency }} ({{ donor.confidence }}) 
+                                @ ${{ "%.0f"|format(donor.typical_amount) }}
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            {% endif %}
+            
+            <!-- Normal Giving -->
+            {% if normal_donors %}
+            <div class="donor-category">
+                <div class="category-header normal">
+                    ✅ NORMAL GIVING ({{ normal_donors|length }})
+                </div>
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Donor</th>
+                            <th>Amount</th>
+                            <th>Change</th>
+                            <th>Giving Pattern</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for donor in normal_donors %}
+                        <tr>
+                            <td>
+                                <div class="donor-name">{{ donor.name }}</div>
+                            </td>
+                            <td>${{ "%.2f"|format(donor.amount) }}</td>
+                            <td class="neutral">
+                                → ${{ "%+.0f"|format(donor.change_amount) }}
+                            </td>
+                            <td class="pattern confidence-{{ donor.confidence|lower }}">
+                                {{ donor.frequency }} ({{ donor.confidence }}) 
+                                @ ${{ "%.0f"|format(donor.typical_amount) }}
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            {% endif %}
+        </div>
     </div>
-    {% endif %}
-    
-    <h3>Last 6 Months</h3>
-    <table class="month-table">
-        <tr>
-            <th>Month</th>
-            <th>Gross Donations</th>
-            <th>Net Cash</th>
-        </tr>
-        {% for month in months_data %}
-        <tr>
-            <td>{{ month.month }}</td>
-            <td>${{ "%.2f"|format(month.gross_donations) }}</td>
-            <td>${{ "%.2f"|format(month.net_cash) }}</td>
-        </tr>
-        {% endfor %}
-    </table>
-    
-    <p><a href="/">Logout</a></p>
 </body>
 </html>
