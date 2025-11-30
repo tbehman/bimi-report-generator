@@ -3,6 +3,7 @@ import requests
 from datetime import datetime, timedelta
 import re
 import os
+import json
 from collections import Counter
 
 app = Flask(__name__)
@@ -14,7 +15,6 @@ class BIMIFetcher:
         self.session = requests.Session()
         self.setup_headers()
         self.is_logged_in = False
-        self.donor_history = {}  # Store donor giving patterns
     
     def setup_headers(self):
         self.headers = {
@@ -111,16 +111,82 @@ class BIMIFetcher:
                     donor_name = donor_match.group(2).strip()
                     amount = float(donor_match.group(3).replace(',', ''))
                     
-                    donor_name = ' '.join(donor_name.split())
+                    # Clean donor name and extract location
+                    clean_name, city, state = self.clean_donor_name(donor_name)
                     
                     donors.append({
                         'donor_number': donor_num,
-                        'name': donor_name,
-                        'amount': amount
+                        'name': clean_name,
+                        'original_name': donor_name,
+                        'amount': amount,
+                        'city': city,
+                        'state': state
                     })
         
         print(f"   ✅ Parsed {len(donors)} donors")
         return donors, financial_totals
+
+    def clean_donor_name(self, donor_name):
+        """Extract clean church name and location from donor string"""
+        # Remove extra spaces
+        donor_name = ' '.join(donor_name.split())
+        
+        # Try to extract city/state first
+        city, state = self.extract_city_state(donor_name)
+        
+        # Clean the church name by removing address parts
+        clean_name = donor_name
+        
+        # Remove PO Box patterns
+        clean_name = re.sub(r'\s+P\s*O\s*BOX\s+\d+.*', '', clean_name, flags=re.IGNORECASE)
+        
+        # Remove street address patterns
+        clean_name = re.sub(r'\s+\d+.*?(?:AVE|AVENUE|ST|STREET|RD|ROAD|BLVD|DR|DRIVE|LANE|LN).*', '', clean_name, flags=re.IGNORECASE)
+        
+        # Remove city, state patterns
+        if city and state:
+            clean_name = re.sub(r'\s*{},?\s*{}.*'.format(re.escape(city), re.escape(state)), '', clean_name, flags=re.IGNORECASE)
+        elif city:
+            clean_name = re.sub(r'\s*{},?.*'.format(re.escape(city)), '', clean_name, flags=re.IGNORECASE)
+        
+        clean_name = clean_name.strip()
+        
+        # If we've removed everything, use the original
+        if not clean_name:
+            clean_name = donor_name
+        
+        return clean_name, city, state
+
+    def extract_city_state(self, donor_name):
+        """Extract city and state from donor name/address"""
+        # Common patterns for city, state
+        patterns = [
+            r'([A-Za-z\s]+),\s*([A-Z]{2})\s*\d*$',  # "City, ST" at end
+            r'([A-Za-z\s]+),\s*([A-Z]{2})\s*$',      # "City, ST" 
+            r'\s+([A-Za-z\s]+)\s+([A-Z]{2})\s*$',    # "City ST" at end
+        ]
+        
+        for pattern in patterns:
+            match = re.search(pattern, donor_name)
+            if match:
+                city = match.group(1).strip()
+                state = match.group(2).strip()
+                
+                # Validate it's not just random words
+                if len(city) > 2 and city.upper() not in ['PO', 'BOX', 'P O']:
+                    return city, state
+        
+        # Try to find common city names
+        common_cities = {
+            'GLENDALE': 'AZ', 'FLOWER MOUND': 'TX', 'LIVONIA': 'MI', 
+            'LEWISTON': 'MI', 'WHITNEY': 'TX', 'DEDEAUX': 'MS'
+        }
+        
+        for city, default_state in common_cities.items():
+            if city in donor_name.upper():
+                return city.title(), default_state
+        
+        return '', ''
 
     def fetch_monthly_data(self, year, month, credentials):
         """Single method that handles login and data fetching"""
@@ -176,19 +242,20 @@ class BIMIFetcher:
                     donor_history[donor_id].append({
                         'date': f"{year}-{month:02d}",
                         'amount': donor['amount'],
-                        'name': donor['name']
+                        'name': donor['name'],
+                        'city': donor['city'],
+                        'state': donor['state']
                     })
         
-        self.donor_history = donor_history
         print(f"✅ Collected history for {len(donor_history)} unique donors")
         return donor_history
 
-    def analyze_giving_pattern(self, donor_id):
+    def analyze_giving_pattern(self, donor_id, donor_history):
         """Analyze donor's giving pattern and return frequency, confidence, and typical amount"""
-        if donor_id not in self.donor_history or len(self.donor_history[donor_id]) < 2:
+        if donor_id not in donor_history or len(donor_history[donor_id]) < 2:
             return "One-Time", "Low", 0, 0
         
-        gifts = self.donor_history[donor_id]
+        gifts = donor_history[donor_id]
         gifts.sort(key=lambda x: x['date'])
         
         # Calculate intervals between consecutive gifts
@@ -236,7 +303,7 @@ class BIMIFetcher:
         
         return frequency, confidence, typical_amount, avg_interval
 
-    def classify_donors(self, current_month_donors):
+    def classify_donors(self, current_month_donors, donor_history):
         """Categorize donors into NEW, CHANGED, MISSED, NORMAL"""
         new_donors = []
         changed_donors = []
@@ -246,8 +313,8 @@ class BIMIFetcher:
         current_month_dict = {d['donor_number']: d for d in current_month_donors}
         
         # Analyze each donor in history
-        for donor_id, history in self.donor_history.items():
-            frequency, confidence, typical_amount, avg_interval = self.analyze_giving_pattern(donor_id)
+        for donor_id, history in donor_history.items():
+            frequency, confidence, typical_amount, avg_interval = self.analyze_giving_pattern(donor_id, donor_history)
             
             if donor_id in current_month_dict:
                 # Donor gave this month
@@ -283,6 +350,8 @@ class BIMIFetcher:
                         missed_donors.append({
                             'donor_number': donor_id,
                             'name': history[0]['name'],
+                            'city': history[0].get('city', ''),
+                            'state': history[0].get('state', ''),
                             'frequency': frequency,
                             'confidence': confidence,
                             'typical_amount': typical_amount,
@@ -291,7 +360,7 @@ class BIMIFetcher:
         
         # Add truly new donors (not in history at all)
         for donor in current_month_donors:
-            if donor['donor_number'] not in self.donor_history:
+            if donor['donor_number'] not in donor_history:
                 new_donors.append({
                     **donor,
                     'frequency': 'One-Time',
@@ -328,10 +397,13 @@ def login():
         print("✅ Login successful!")
         
         # Collect donor history for analysis
-        fetcher.collect_donor_history(credentials, months=7)
+        donor_history = fetcher.collect_donor_history(credentials, months=7)
         
+        # Store in session as JSON-serializable format
         session['bimi_credentials'] = credentials
-        session['donor_history'] = fetcher.donor_history
+        session['donor_history'] = donor_history
+        print(f"💾 Stored donor history for {len(donor_history)} donors")
+        
         return redirect(url_for('dashboard'))
     else:
         print("❌ Login failed")
@@ -345,8 +417,9 @@ def dashboard():
     credentials = session['bimi_credentials']
     donor_history = session.get('donor_history', {})
     
+    print(f"📊 Loading dashboard with history for {len(donor_history)} donors")
+    
     fetcher = BIMIFetcher()
-    fetcher.donor_history = donor_history
     
     # Get current month data
     today = datetime.now()
@@ -395,11 +468,15 @@ def dashboard():
         avg_gross = 0
         current_month = None
     
-    # Classify donors
-    new_donors, changed_donors, missed_donors, normal_donors = fetcher.classify_donors(current_donors)
+    # Classify donors using the stored history
+    print(f"🔍 Classifying {len(current_donors)} current donors...")
+    new_donors, changed_donors, missed_donors, normal_donors = fetcher.classify_donors(current_donors, donor_history)
     
-    # Update session
-    session['donor_history'] = fetcher.donor_history
+    print(f"📋 Classification results:")
+    print(f"   🆕 NEW: {len(new_donors)}")
+    print(f"   📈 CHANGED: {len(changed_donors)}")
+    print(f"   ❌ MISSED: {len(missed_donors)}")
+    print(f"   ✅ NORMAL: {len(normal_donors)}")
     
     return render_template('dashboard.html', 
                          months_data=months_data,
