@@ -11,6 +11,9 @@ import hashlib
 app = Flask(__name__)
 app.secret_key = os.environ.get('SECRET_KEY', 'dev-key-change-in-production')
 
+# CONFIGURATION - Easy to change!
+MONTHS_OF_HISTORY = 12  # Change this to 6, 9, 12, etc.
+
 # In-memory storage for data
 data_store = {}
 
@@ -82,8 +85,8 @@ class BIMIFetcher:
             print(f"❌ Error fetching {month}/{year}: {e}")
             return None
 
-    def parse_financial_data_simple(self, text_data):
-        """Simple parser that focuses on key data"""
+    def parse_financial_data(self, text_data):
+        """Parse financial data with donor information"""
         if not text_data or "Missionary Login" in text_data:
             return None
             
@@ -125,7 +128,9 @@ class BIMIFetcher:
                     donors.append({
                         'donor_number': donor_num,
                         'name': clean_name,
-                        'amount': amount
+                        'amount': amount,
+                        'city': '',
+                        'state': ''
                     })
             
             i += 1
@@ -133,13 +138,13 @@ class BIMIFetcher:
         print(f"   ✅ Parsed {len(donors)} donors")
         return donors, financial_totals
 
-    def fetch_monthly_data_fast(self, year, month, credentials):
-        """Fast version that only gets essential data"""
+    def fetch_monthly_data(self, year, month, credentials):
+        """Fetch monthly data"""
         text_data = self.fetch_financial_text(year, month, credentials)
         if not text_data:
             return None
         
-        result = self.parse_financial_data_simple(text_data)
+        result = self.parse_financial_data(text_data)
         if not result:
             return None
             
@@ -150,6 +155,118 @@ class BIMIFetcher:
             'net_cash': financial_totals.get('net_available_cash', 0),
             'donors': donors
         }
+
+    def analyze_giving_pattern(self, donor_id, donor_history):
+        """Analyze donor's giving pattern"""
+        if donor_id not in donor_history or len(donor_history[donor_id]) < 2:
+            return "One-Time", "Low", 0
+        
+        gifts = donor_history[donor_id]
+        gifts.sort(key=lambda x: x['date'])
+        
+        # Calculate intervals between gifts
+        intervals = []
+        for i in range(1, len(gifts)):
+            current_date = datetime.strptime(gifts[i]['date'], '%Y-%m')
+            previous_date = datetime.strptime(gifts[i-1]['date'], '%Y-%m')
+            months_diff = (current_date.year - previous_date.year) * 12 + (current_date.month - previous_date.month)
+            intervals.append(months_diff)
+        
+        # Calculate typical amount (mode)
+        amounts = [g['amount'] for g in gifts]
+        amount_counter = Counter(amounts)
+        typical_amount = amount_counter.most_common(1)[0][0] if amount_counter else sum(amounts) / len(amounts)
+        
+        if not intervals:
+            return "One-Time", "Low", typical_amount
+        
+        # Determine frequency pattern
+        interval_counter = Counter(intervals)
+        most_common_interval, count = interval_counter.most_common(1)[0]
+        consistency = count / len(intervals)
+        
+        # Map to frequency names
+        frequency_map = {
+            1: "Monthly",
+            2: "Bi-Monthly", 
+            3: "Quarterly",
+            6: "Semi-Annual",
+            12: "Annual"
+        }
+        
+        frequency = frequency_map.get(most_common_interval, f"Every {most_common_interval} Months")
+        
+        # Determine confidence
+        if consistency >= 0.8 and len(gifts) >= 4:
+            confidence = "High"
+        elif consistency >= 0.6 and len(gifts) >= 3:
+            confidence = "Medium"
+        else:
+            confidence = "Low"
+            frequency = "Variable"
+        
+        return frequency, confidence, typical_amount
+
+    def classify_donors_smart(self, current_month_donors, donor_history):
+        """Smart donor classification with 12-month history"""
+        new_donors = []
+        changed_donors = []
+        normal_donors = []
+        missed_donors = []
+        
+        current_month_dict = {d['donor_number']: d for d in current_month_donors}
+        
+        print(f"🔍 Analyzing {len(donor_history)} historical donors...")
+        
+        # Analyze each donor in history
+        for donor_id, history in donor_history.items():
+            frequency, confidence, typical_amount = self.analyze_giving_pattern(donor_id, donor_history)
+            
+            if donor_id in current_month_dict:
+                current_gift = current_month_dict[donor_id]['amount']
+                change = current_gift - typical_amount
+                change_percent = (change / typical_amount * 100) if typical_amount > 0 else 0
+                
+                donor_data = {
+                    **current_month_dict[donor_id],
+                    'frequency': frequency,
+                    'confidence': confidence,
+                    'typical_amount': typical_amount,
+                    'change_amount': change,
+                    'change_percent': change_percent
+                }
+                
+                # Classification logic
+                if len(history) == 1:  # Only one previous gift
+                    new_donors.append(donor_data)
+                elif abs(change_percent) > 50:  # Major changes
+                    changed_donors.append(donor_data)
+                else:
+                    normal_donors.append(donor_data)
+            else:
+                # Donor didn't give this month
+                if frequency != "One-Time" and confidence in ["High", "Medium"]:
+                    missed_donors.append({
+                        'donor_number': donor_id,
+                        'name': history[0]['name'],
+                        'frequency': frequency,
+                        'confidence': confidence,
+                        'typical_amount': typical_amount
+                    })
+        
+        # Add truly new donors (not in history at all)
+        for donor in current_month_donors:
+            if donor['donor_number'] not in donor_history:
+                new_donors.append({
+                    **donor,
+                    'frequency': 'One-Time',
+                    'confidence': 'Low',
+                    'typical_amount': donor['amount'],
+                    'change_amount': 0,
+                    'change_percent': 0
+                })
+        
+        return new_donors, changed_donors, missed_donors, normal_donors
 
 def generate_session_id(credentials):
     """Generate a unique session ID"""
@@ -184,13 +301,14 @@ def login():
         session_id = generate_session_id(credentials)
         session['session_id'] = session_id
         
-        # Store minimal session data
+        # Store session data
         data_store[session_id] = {
             'credentials': credentials,
-            'login_time': datetime.now().isoformat()
+            'login_time': datetime.now().isoformat(),
+            'data_loaded': False,
+            'months_of_history': MONTHS_OF_HISTORY  # Store the config
         }
         
-        # Immediately redirect to loading page
         return redirect(url_for('loading'))
     else:
         print("❌ Login failed")
@@ -198,14 +316,18 @@ def login():
 
 @app.route('/loading')
 def loading():
-    """Simple loading page that starts data collection"""
+    """Loading page"""
     if 'session_id' not in session:
         return redirect(url_for('login_page'))
-    return render_template('loading_simple.html')
+    
+    session_id = session.get('session_id')
+    months_count = data_store.get(session_id, {}).get('months_of_history', MONTHS_OF_HISTORY)
+    
+    return render_template('loading.html', months_count=months_count)
 
 @app.route('/load-initial-data')
 def load_initial_data():
-    """Load only essential data quickly"""
+    """Load current month data quickly"""
     session_id = session.get('session_id')
     if not session_id or session_id not in data_store:
         return jsonify({'status': 'error', 'message': 'Not authenticated'})
@@ -213,14 +335,14 @@ def load_initial_data():
     credentials = data_store[session_id]['credentials']
     fetcher = BIMIFetcher()
     
-    print("🚀 Loading essential data...")
+    print("🚀 Loading current month data...")
     
     try:
         # Get current month only (fast)
         current_date = datetime.now()
         report_month = current_date.replace(day=1) - timedelta(days=1)
         
-        current_data = fetcher.fetch_monthly_data_fast(
+        current_data = fetcher.fetch_monthly_data(
             report_month.year, 
             report_month.month, 
             credentials
@@ -229,14 +351,15 @@ def load_initial_data():
         if not current_data:
             return jsonify({'status': 'error', 'message': 'Failed to fetch current data'})
         
-        # Store only current month data initially
+        # Store current data
         data_store[session_id].update({
             'current_data': current_data,
             'data_loaded': True,
-            'loaded_at': datetime.now().isoformat()
+            'loaded_at': datetime.now().isoformat(),
+            'report_month': report_month.strftime('%B %Y')
         })
         
-        print(f"✅ Initial data loaded: {len(current_data.get('donors', []))} donors")
+        print(f"✅ Current data loaded: {len(current_data.get('donors', []))} donors")
         
         return jsonify({
             'status': 'complete',
@@ -250,42 +373,43 @@ def load_initial_data():
 
 @app.route('/dashboard')
 def dashboard():
-    """Smart dashboard that shows current data immediately, enhances later"""
+    """Dashboard with full 12-month analytics"""
     session_id = session.get('session_id')
+    
     if not session_id or session_id not in data_store:
         return redirect(url_for('login_page'))
     
     session_data = data_store[session_id]
     
-    # Get current data (always available)
+    # Redirect to loading if no data
+    if not session_data.get('data_loaded'):
+        return redirect(url_for('loading'))
+    
+    print("✅ Showing dashboard with analytics")
+    
+    # Get current data
     current_data = session_data.get('current_data', {})
     current_donors = current_data.get('donors', [])
     
-    # Calculate report month
-    current_date = datetime.now()
-    report_month = current_date.replace(day=1) - timedelta(days=1)
-    report_display = report_month.strftime('%B %Y')
+    # Get report period
+    report_display = session_data.get('report_month', 'Current Month')
+    months_count = session_data.get('months_of_history', MONTHS_OF_HISTORY)
     
-    # Check if we have full history for enhanced analytics
+    # Check if we have full history
     has_full_history = session_data.get('full_history_loaded', False)
     donor_history = session_data.get('donor_history', {})
     
-    # Simple classification if no full history
-    if not has_full_history:
-        new_donors = current_donors
-        changed_donors = []
-        missed_donors = []
-        normal_donors = []
-        months_data = []
-        avg_gross = current_data.get('gross_donations', 0)
-    else:
-        # Full analytics with 12 months of data
+    # Build monthly data for display
+    months_data = []
+    current_date = datetime.now()
+    
+    if has_full_history:
+        # Full analytics with smart classification
         fetcher = BIMIFetcher()
         new_donors, changed_donors, missed_donors, normal_donors = fetcher.classify_donors_smart(current_donors, donor_history)
         
-        # Build 12-month history for charts
-        months_data = []
-        for i in range(12):
+        # Build complete monthly history for charts
+        for i in range(months_count):
             month_date = current_date.replace(day=1)
             for _ in range(i):
                 if month_date.month == 1:
@@ -298,44 +422,65 @@ def dashboard():
             month_key = f"{year_val}-{month_val:02d}"
             
             month_gross = 0
+            month_donors = []
+            
             for donor_id, history in donor_history.items():
                 for gift in history:
                     if gift['date'] == month_key:
                         month_gross += gift['amount']
+                        month_donors.append(gift)
             
-            if month_gross > 0:
+            if month_gross > 0 or i == 0:  # Always include current month
                 months_data.append({
                     'month': f"{month_date.strftime('%B %Y')}",
                     'gross_donations': month_gross,
-                    'net_cash': month_gross
+                    'net_cash': month_gross,
+                    'donor_count': len(month_donors)
                 })
         
-        # Calculate average
+        # Calculate 12-month average
         if months_data:
             amounts = [m['gross_donations'] for m in months_data]
             if len(amounts) >= 3:
                 sorted_amounts = sorted(amounts)
-                trimmed_amounts = sorted_amounts[1:-1]
+                trimmed_amounts = sorted_amounts[1:-1]  # Remove outliers
                 avg_gross = sum(trimmed_amounts) / len(trimmed_amounts)
             else:
                 avg_gross = sum(amounts) / len(amounts)
             
+            # Calculate differences from average
             for month_data in months_data:
                 dollar_diff = month_data['gross_donations'] - avg_gross
-                percent_diff = (dollar_diff / avg_gross) * 100
+                percent_diff = (dollar_diff / avg_gross) * 100 if avg_gross > 0 else 0
                 month_data['dollar_diff'] = dollar_diff
                 month_data['percent_diff'] = percent_diff
+            
+            current_month_data = months_data[0]
         else:
             avg_gross = 0
+            current_month_data = {
+                'month': report_display,
+                'gross_donations': current_data.get('gross_donations', 0),
+                'net_cash': current_data.get('net_cash', 0)
+            }
+    else:
+        # Just show current month (fast mode)
+        new_donors = current_donors
+        changed_donors = []
+        missed_donors = []
+        normal_donors = []
+        months_data = [{
+            'month': report_display,
+            'gross_donations': current_data.get('gross_donations', 0),
+            'net_cash': current_data.get('net_cash', 0)
+        }]
+        avg_gross = current_data.get('gross_donations', 0)
+        current_month_data = months_data[0]
     
-    return render_template('dashboard_enhanced.html', 
+    return render_template('dashboard.html', 
                          months_data=months_data,
                          average_gross=avg_gross,
-                         current_month=months_data[0] if months_data else {
-                             'month': report_display,
-                             'gross_donations': current_data.get('gross_donations', 0),
-                             'net_cash': current_data.get('net_cash', 0)
-                         },
+                         current_month=current_month_data,
                          new_donors=new_donors,
                          changed_donors=changed_donors,
                          missed_donors=missed_donors,
@@ -343,28 +488,30 @@ def dashboard():
                          total_donors=len(current_donors),
                          report_display=report_display,
                          has_full_history=has_full_history,
-                         history_progress=session_data.get('history_progress', 0))
+                         months_count=months_count,
+                         gross_donations=current_data.get('gross_donations', 0),
+                         net_cash=current_data.get('net_cash', 0))
 
 @app.route('/load-full-history')
 def load_full_history():
-    """Background task to load full 12-month history"""
+    """Background task to load full MONTHS_OF_HISTORY months"""
     session_id = session.get('session_id')
     if not session_id or session_id not in data_store:
         return jsonify({'status': 'error', 'message': 'Not authenticated'})
     
     credentials = data_store[session_id]['credentials']
+    months_count = data_store[session_id].get('months_of_history', MONTHS_OF_HISTORY)
     fetcher = BIMIFetcher()
     
-    print("📈 Loading full 12-month history in background...")
+    print(f"📈 Loading {months_count} months of history in background...")
     
     try:
         current_date = datetime.now()
         donor_history = {}
-        total_months = 12
         loaded_months = 0
         
-        # Start from current month and go backwards
-        for i in range(total_months):
+        # Load specified number of months
+        for i in range(months_count):
             month_date = current_date.replace(day=1)
             for _ in range(i):
                 if month_date.month == 1:
@@ -372,11 +519,7 @@ def load_full_history():
                 else:
                     month_date = month_date.replace(month=month_date.month-1)
             
-            # Skip current month (already loaded)
-            if i == 0:
-                continue
-                
-            month_data = fetcher.fetch_monthly_data_fast(
+            month_data = fetcher.fetch_monthly_data(
                 month_date.year, 
                 month_date.month, 
                 credentials
@@ -390,7 +533,7 @@ def load_full_history():
                         donor_history[donor_id] = []
                     
                     month_key = f"{month_date.year}-{month_date.month:02d}"
-                    # Only add if not already in history
+                    # Avoid duplicates
                     existing_dates = [g['date'] for g in donor_history[donor_id]]
                     if month_key not in existing_dates:
                         donor_history[donor_id].append({
@@ -401,49 +544,41 @@ def load_full_history():
                             'state': donor.get('state', '')
                         })
             
-            # Update progress
-            data_store[session_id]['history_progress'] = (i / total_months) * 100
-            
-            time.sleep(1)  # Respectful delay
+            # Small delay to be respectful
+            time.sleep(0.8)
         
-        # Merge with any existing history and mark as complete
-        existing_history = data_store[session_id].get('donor_history', {})
-        for donor_id, history in donor_history.items():
-            if donor_id in existing_history:
-                # Merge histories, avoiding duplicates
-                existing_dates = [g['date'] for g in existing_history[donor_id]]
-                for gift in history:
-                    if gift['date'] not in existing_dates:
-                        existing_history[donor_id].append(gift)
-            else:
-                existing_history[donor_id] = history
-        
-        data_store[session_id]['donor_history'] = existing_history
+        # Update with full history
+        data_store[session_id]['donor_history'] = donor_history
         data_store[session_id]['full_history_loaded'] = True
-        data_store[session_id]['history_progress'] = 100
+        data_store[session_id]['history_loaded_at'] = datetime.now().isoformat()
         
-        print(f"✅ Full history loaded: {len(existing_history)} donors across {loaded_months} months")
+        print(f"✅ Full {months_count}-month history loaded: {len(donor_history)} donors across {loaded_months} months")
         return jsonify({
             'status': 'complete', 
-            'donors_loaded': len(existing_history),
-            'months_loaded': loaded_months
+            'donors_loaded': len(donor_history),
+            'months_loaded': loaded_months,
+            'total_months': months_count
         })
         
     except Exception as e:
         print(f"❌ Error loading full history: {e}")
         return jsonify({'status': 'error', 'message': str(e)})
-        
+
 @app.route('/status')
 def status():
-    return jsonify({'status': 'ok'})
+    return jsonify({'status': 'ok', 'months_config': MONTHS_OF_HISTORY})
 
 @app.route('/debug')
 def debug():
     session_id = session.get('session_id')
+    session_data = data_store.get(session_id, {}) if session_id else {}
     return jsonify({
         'session_id': session_id,
         'data_store_keys': list(data_store.keys()),
-        'session_data': data_store.get(session_id, {}) if session_id else {}
+        'months_config': MONTHS_OF_HISTORY,
+        'session_months': session_data.get('months_of_history'),
+        'has_full_history': session_data.get('full_history_loaded', False),
+        'donor_history_count': len(session_data.get('donor_history', {}))
     })
 
 @app.route('/logout')
@@ -456,6 +591,5 @@ def logout():
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
+    print(f"🚀 Starting app with {MONTHS_OF_HISTORY} months of history...")
     app.run(host='0.0.0.0', port=port, debug=False)
-
-
