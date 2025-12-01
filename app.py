@@ -69,9 +69,66 @@ class BIMIFetcher:
         else:
             print(f"❌ Failed to fetch data for {month}/{year}: {response.status_code}")
             return None
-    
-    def parse_financial_data_simple(self, text_data):
-        """Improved parser - extract donor numbers, names, and amounts"""
+
+    def is_address_line(self, line):
+        """Check if line is likely an address line (city/state/zip)"""
+        line = line.rstrip()
+        
+        # Empty or very short lines are not address lines
+        if len(line.strip()) < 5:
+            return False
+            
+        patterns = [
+            r'^\s{30,}.*[A-Z]{2}\s+\d{5}',  # Padded + STATE ZIP
+            r'^\s{30,}.*Canada',             # Padded + Canada
+            r'^\s{30,}[A-Z][A-Za-z\s]+,?\s*[A-Z]{2}',  # Padded + City, ST
+            r'^\s{30,}[A-Z][A-Za-z\s]+\s+[A-Z]{2}\s+\d{5}',  # Padded + City ST ZIP
+        ]
+        return any(re.search(pattern, line) for pattern in patterns)
+
+    def extract_city_state_from_address(self, address_line):
+        """Extract city and state with high accuracy from address line"""
+        address_line = address_line.strip()
+        
+        # Pattern 1: "CITY STATE ZIP" (most common)
+        match = re.search(r'^([A-Z][A-Za-z\s]+?)\s+([A-Z]{2})\s+\d{5}', address_line)
+        if match:
+            return match.group(1).strip(), match.group(2).strip()
+        
+        # Pattern 2: "CITY, STATE ZIP" 
+        match = re.search(r'^([A-Z][A-Za-z\s]+?),?\s+([A-Z]{2})\s+\d{5}', address_line)
+        if match:
+            return match.group(1).strip(), match.group(2).strip()
+        
+        # Pattern 3: Canadian addresses
+        if 'Canada' in address_line:
+            # Extract everything before "Canada" as city
+            city_match = re.search(r'^([A-Z][A-Za-z\s]+)\s+Canada', address_line)
+            if city_match:
+                return city_match.group(1).strip(), 'Canada'
+        
+        # Pattern 4: Just city and state without zip
+        match = re.search(r'^([A-Z][A-Za-z\s]+?)\s+([A-Z]{2})\s*$', address_line)
+        if match:
+            return match.group(1).strip(), match.group(2).strip()
+        
+        return '', ''
+
+    def clean_donor_name(self, donor_name):
+        """Clean donor name by removing common address patterns"""
+        # Remove PO Box patterns
+        clean_name = re.sub(r'\s+P\s*O\s*BOX\s+\d+.*', '', donor_name, flags=re.IGNORECASE)
+        
+        # Remove street address patterns (numbers followed by street types)
+        clean_name = re.sub(r'\s+\d+.*?(?:AVE|AVENUE|ST|STREET|RD|ROAD|BLVD|DR|DRIVE|LANE|LN).*', '', clean_name, flags=re.IGNORECASE)
+        
+        # Remove extra spaces and trim
+        clean_name = ' '.join(clean_name.split())
+        
+        return clean_name
+
+    def parse_financial_data_multiline(self, text_data):
+        """Multi-line parser that handles donor numbers, names, amounts, and addresses"""
         if "Missionary Login" in text_data:
             print("   ❌ Received login page instead of financial data")
             return None
@@ -82,16 +139,20 @@ class BIMIFetcher:
         lines = text_data.split('\n')
         in_donor_section = False
         
-        print("🔍 Parsing financial data...")
+        print("🔍 Parsing financial data with multi-line parser...")
         
-        for line in lines:
-            line = line.rstrip()
+        i = 0
+        while i < len(lines):
+            line = lines[i].rstrip()
             
+            # Section detection
             if "YOUR DONATIONS FOR THIS MONTH" in line:
                 in_donor_section = True
+                i += 1
                 continue
             elif "YOUR DEDUCTIONS" in line and in_donor_section:
                 in_donor_section = False
+                i += 1
                 continue
             elif "TOTAL DONATIONS FOR THIS MONTH" in line:
                 total_match = re.search(r'\$([\d,]+\.\d+)', line)
@@ -104,15 +165,28 @@ class BIMIFetcher:
                     financial_totals['net_available_cash'] = float(cash_match.group(1).replace(',', ''))
                     print(f"   ✅ Found net available cash: ${financial_totals['net_available_cash']:,.2f}")
             
+            # Donor parsing in donor section
             if in_donor_section and line.strip():
+                # Check if this is a donor line (has donor number and amount)
                 donor_match = re.match(r'^\s*(\d+)\s+(.*?)\s+\$([\d,]+\.\d+)$', line)
+                
                 if donor_match:
                     donor_num = donor_match.group(1).strip()
                     donor_name = donor_match.group(2).strip()
                     amount = float(donor_match.group(3).replace(',', ''))
                     
-                    # Clean donor name and extract location
-                    clean_name, city, state = self.clean_donor_name(donor_name)
+                    # Initialize city/state
+                    city, state = '', ''
+                    
+                    # Look ahead for address line
+                    if i + 1 < len(lines) and self.is_address_line(lines[i + 1]):
+                        address_line = lines[i + 1].strip()
+                        city, state = self.extract_city_state_from_address(address_line)
+                        print(f"   📍 Found location: {city}, {state} for donor {donor_num}")
+                        i += 1  # Skip the address line
+                    
+                    # Clean donor name
+                    clean_name = self.clean_donor_name(donor_name)
                     
                     donors.append({
                         'donor_number': donor_num,
@@ -122,71 +196,12 @@ class BIMIFetcher:
                         'city': city,
                         'state': state
                     })
+                    print(f"   ✅ Parsed donor: {clean_name} (${amount})")
+            
+            i += 1
         
-        print(f"   ✅ Parsed {len(donors)} donors")
+        print(f"   ✅ Successfully parsed {len(donors)} donors with multi-line parser")
         return donors, financial_totals
-
-    def clean_donor_name(self, donor_name):
-        """Extract clean church name and location from donor string"""
-        # Remove extra spaces
-        donor_name = ' '.join(donor_name.split())
-        
-        # Try to extract city/state first
-        city, state = self.extract_city_state(donor_name)
-        
-        # Clean the church name by removing address parts
-        clean_name = donor_name
-        
-        # Remove PO Box patterns
-        clean_name = re.sub(r'\s+P\s*O\s*BOX\s+\d+.*', '', clean_name, flags=re.IGNORECASE)
-        
-        # Remove street address patterns
-        clean_name = re.sub(r'\s+\d+.*?(?:AVE|AVENUE|ST|STREET|RD|ROAD|BLVD|DR|DRIVE|LANE|LN).*', '', clean_name, flags=re.IGNORECASE)
-        
-        # Remove city, state patterns
-        if city and state:
-            clean_name = re.sub(r'\s*{},?\s*{}.*'.format(re.escape(city), re.escape(state)), '', clean_name, flags=re.IGNORECASE)
-        elif city:
-            clean_name = re.sub(r'\s*{},?.*'.format(re.escape(city)), '', clean_name, flags=re.IGNORECASE)
-        
-        clean_name = clean_name.strip()
-        
-        # If we've removed everything, use the original
-        if not clean_name:
-            clean_name = donor_name
-        
-        return clean_name, city, state
-
-    def extract_city_state(self, donor_name):
-        """Extract city and state from donor name/address"""
-        # Common patterns for city, state
-        patterns = [
-            r'([A-Za-z\s]+),\s*([A-Z]{2})\s*\d*$',  # "City, ST" at end
-            r'([A-Za-z\s]+),\s*([A-Z]{2})\s*$',      # "City, ST" 
-            r'\s+([A-Za-z\s]+)\s+([A-Z]{2})\s*$',    # "City ST" at end
-        ]
-        
-        for pattern in patterns:
-            match = re.search(pattern, donor_name)
-            if match:
-                city = match.group(1).strip()
-                state = match.group(2).strip()
-                
-                # Validate it's not just random words
-                if len(city) > 2 and city.upper() not in ['PO', 'BOX', 'P O']:
-                    return city, state
-        
-        # Try to find common city names
-        common_cities = {
-            'GLENDALE': 'AZ', 'FLOWER MOUND': 'TX', 'LIVONIA': 'MI', 
-            'LEWISTON': 'MI', 'WHITNEY': 'TX', 'DEDEAUX': 'MS'
-        }
-        
-        for city, default_state in common_cities.items():
-            if city in donor_name.upper():
-                return city.title(), default_state
-        
-        return '', ''
 
     def fetch_monthly_data(self, year, month, credentials):
         """Single method that handles login and data fetching"""
@@ -197,7 +212,7 @@ class BIMIFetcher:
             print(f"   ❌ No data retrieved for {month}/{year}")
             return None
         
-        result = self.parse_financial_data_simple(text_data)
+        result = self.parse_financial_data_multiline(text_data)
         if not result:
             return None
             
@@ -212,7 +227,7 @@ class BIMIFetcher:
         print(f"   📊 Totals: Gross=${totals['gross_donations']:,.2f}, Net=${totals['net_cash']:,.2f}")
         return totals
 
-    def collect_donor_history(self, credentials, months=7):
+    def collect_donor_history(self, credentials, months=12):
         """Collect donor history for pattern analysis"""
         print(f"\n🕐 COLLECTING {months} MONTHS OF DONOR HISTORY...")
         
@@ -312,6 +327,11 @@ class BIMIFetcher:
         
         current_month_dict = {d['donor_number']: d for d in current_month_donors}
         
+        print(f"🔍 CLASSIFICATION DEBUG:")
+        print(f"   Donor history entries: {len(donor_history)}")
+        print(f"   Current month donors: {len(current_donors)}")
+        print(f"   Donors in both: {len(set(current_month_dict.keys()) & set(donor_history.keys()))}")
+        
         # Analyze each donor in history
         for donor_id, history in donor_history.items():
             frequency, confidence, typical_amount, avg_interval = self.analyze_giving_pattern(donor_id, donor_history)
@@ -396,10 +416,10 @@ def login():
     if fetcher.login_to_bimi(credentials):
         print("✅ Login successful!")
         
-        # Collect donor history for analysis
-        donor_history = fetcher.collect_donor_history(credentials, months=7)
+        # Collect donor history for analysis (now 12 months)
+        donor_history = fetcher.collect_donor_history(credentials, months=12)
         
-        # Store in session as JSON-serializable format
+        # Store in session
         session['bimi_credentials'] = credentials
         session['donor_history'] = donor_history
         print(f"💾 Stored donor history for {len(donor_history)} donors")
@@ -421,12 +441,16 @@ def dashboard():
     
     fetcher = BIMIFetcher()
     
-    # Get current month data
-    today = datetime.now()
-    year = today.year
-    month = today.month
+    # Calculate report month (previous month)
+    current_date = datetime.now()
+    report_month = current_date.replace(day=1) - timedelta(days=1)
+    report_display = report_month.strftime('%B %Y')
     
-    print(f"📊 Fetching current month data for {month}/{year}...")
+    # Get current month data (the report month)
+    year = report_month.year
+    month = report_month.month
+    
+    print(f"📊 Fetching report data for {report_display} ({month}/{year})...")
     current_data = fetcher.fetch_monthly_data(year, month, credentials)
     
     if not current_data:
@@ -434,10 +458,10 @@ def dashboard():
     
     current_donors = current_data.get('donors', [])
     
-    # Get last 6 months for average calculation
+    # Get last 12 months for average calculation
     months_data = []
-    for i in range(6):
-        month_date = today.replace(day=1)
+    for i in range(12):
+        month_date = current_date.replace(day=1)
         for _ in range(i):
             if month_date.month == 1:
                 month_date = month_date.replace(year=month_date.year-1, month=12)
@@ -455,7 +479,7 @@ def dashboard():
                 'net_cash': month_data['net_cash']
             })
     
-    # Calculate 6-month average and enhancements
+    # Calculate 12-month average and enhancements
     if months_data:
         avg_gross = sum(m['gross_donations'] for m in months_data) / len(months_data)
         for month_data in months_data:
@@ -486,7 +510,9 @@ def dashboard():
                          changed_donors=changed_donors,
                          missed_donors=missed_donors,
                          normal_donors=normal_donors,
-                         total_donors=len(current_donors))
+                         total_donors=len(current_donors),
+                         report_display=report_display,
+                         current_date=current_date)
 
 @app.route('/logout')
 def logout():
