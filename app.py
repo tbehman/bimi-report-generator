@@ -250,21 +250,14 @@ def load_initial_data():
 
 @app.route('/dashboard')
 def dashboard():
-    """Simple dashboard with current month data only"""
+    """Smart dashboard that shows current data immediately, enhances later"""
     session_id = session.get('session_id')
-    
     if not session_id or session_id not in data_store:
         return redirect(url_for('login_page'))
     
     session_data = data_store[session_id]
     
-    # If no data loaded, redirect to loading
-    if not session_data.get('data_loaded'):
-        return redirect(url_for('loading'))
-    
-    print("✅ Showing dashboard with current data")
-    
-    # Get current data
+    # Get current data (always available)
     current_data = session_data.get('current_data', {})
     current_donors = current_data.get('donors', [])
     
@@ -273,18 +266,84 @@ def dashboard():
     report_month = current_date.replace(day=1) - timedelta(days=1)
     report_display = report_month.strftime('%B %Y')
     
-    # Simple classification (just new donors for now)
-    new_donors = current_donors  # For simplicity, treat all as new
+    # Check if we have full history for enhanced analytics
+    has_full_history = session_data.get('full_history_loaded', False)
+    donor_history = session_data.get('donor_history', {})
     
-    return render_template('dashboard_simple.html', 
-                         current_month={
+    # Simple classification if no full history
+    if not has_full_history:
+        new_donors = current_donors
+        changed_donors = []
+        missed_donors = []
+        normal_donors = []
+        months_data = []
+        avg_gross = current_data.get('gross_donations', 0)
+    else:
+        # Full analytics with 12 months of data
+        fetcher = BIMIFetcher()
+        new_donors, changed_donors, missed_donors, normal_donors = fetcher.classify_donors_smart(current_donors, donor_history)
+        
+        # Build 12-month history for charts
+        months_data = []
+        for i in range(12):
+            month_date = current_date.replace(day=1)
+            for _ in range(i):
+                if month_date.month == 1:
+                    month_date = month_date.replace(year=month_date.year-1, month=12)
+                else:
+                    month_date = month_date.replace(month=month_date.month-1)
+            
+            year_val = month_date.year
+            month_val = month_date.month
+            month_key = f"{year_val}-{month_val:02d}"
+            
+            month_gross = 0
+            for donor_id, history in donor_history.items():
+                for gift in history:
+                    if gift['date'] == month_key:
+                        month_gross += gift['amount']
+            
+            if month_gross > 0:
+                months_data.append({
+                    'month': f"{month_date.strftime('%B %Y')}",
+                    'gross_donations': month_gross,
+                    'net_cash': month_gross
+                })
+        
+        # Calculate average
+        if months_data:
+            amounts = [m['gross_donations'] for m in months_data]
+            if len(amounts) >= 3:
+                sorted_amounts = sorted(amounts)
+                trimmed_amounts = sorted_amounts[1:-1]
+                avg_gross = sum(trimmed_amounts) / len(trimmed_amounts)
+            else:
+                avg_gross = sum(amounts) / len(amounts)
+            
+            for month_data in months_data:
+                dollar_diff = month_data['gross_donations'] - avg_gross
+                percent_diff = (dollar_diff / avg_gross) * 100
+                month_data['dollar_diff'] = dollar_diff
+                month_data['percent_diff'] = percent_diff
+        else:
+            avg_gross = 0
+    
+    return render_template('dashboard_enhanced.html', 
+                         months_data=months_data,
+                         average_gross=avg_gross,
+                         current_month=months_data[0] if months_data else {
                              'month': report_display,
                              'gross_donations': current_data.get('gross_donations', 0),
                              'net_cash': current_data.get('net_cash', 0)
                          },
                          new_donors=new_donors,
+                         changed_donors=changed_donors,
+                         missed_donors=missed_donors,
+                         normal_donors=normal_donors,
                          total_donors=len(current_donors),
-                         report_display=report_display)
+                         report_display=report_display,
+                         has_full_history=has_full_history,
+                         history_progress=session_data.get('history_progress', 0))
 
 @app.route('/load-full-history')
 def load_full_history():
@@ -367,3 +426,4 @@ def logout():
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port, debug=False)
+
