@@ -234,45 +234,6 @@ class BIMIFetcher:
         print(f"   📊 Totals: Gross=${totals['gross_donations']:,.2f}, Net=${totals['net_cash']:,.2f}")
         return totals
 
-    def collect_donor_history_quick(self, credentials, months=6):
-        """Quick donor history collection for immediate dashboard display"""
-        print(f"\n⚡ QUICK COLLECTING {months} MONTHS OF DONOR HISTORY...")
-        
-        today = datetime.now()
-        donor_history = {}
-        
-        # Only collect recent months for quick display
-        for i in range(min(months, 3)):  # Start with just 3 months for speed
-            month_date = today.replace(day=1)
-            for _ in range(i):
-                if month_date.month == 1:
-                    month_date = month_date.replace(year=month_date.year-1, month=12)
-                else:
-                    month_date = month_date.replace(month=month_date.month-1)
-            
-            year = month_date.year
-            month = month_date.month
-            
-            print(f"📅 Quick analyzing {year}-{month:02d}...")
-            data = self.fetch_monthly_data(year, month, credentials)
-            
-            if data and data.get('donors'):
-                for donor in data['donors']:
-                    donor_id = donor['donor_number']
-                    if donor_id not in donor_history:
-                        donor_history[donor_id] = []
-                    
-                    donor_history[donor_id].append({
-                        'date': f"{year}-{month:02d}",
-                        'amount': donor['amount'],
-                        'name': donor['name'],
-                        'city': donor['city'],
-                        'state': donor['state']
-                    })
-        
-        print(f"✅ Quick collected history for {len(donor_history)} unique donors")
-        return donor_history
-
     def analyze_giving_pattern(self, donor_id, donor_history):
         """Analyze donor's giving pattern and return frequency, confidence, and typical amount"""
         if donor_id not in donor_history or len(donor_history[donor_id]) < 2:
@@ -326,8 +287,8 @@ class BIMIFetcher:
         
         return frequency, confidence, typical_amount, avg_interval
 
-    def classify_donors(self, current_month_donors, donor_history):
-        """Categorize donors into NEW, CHANGED, MISSED, NORMAL"""
+    def classify_donors_smart(self, current_month_donors, donor_history):
+        """Smart donor classification that works with limited history"""
         new_donors = []
         changed_donors = []
         normal_donors = []
@@ -345,7 +306,6 @@ class BIMIFetcher:
             frequency, confidence, typical_amount, avg_interval = self.analyze_giving_pattern(donor_id, donor_history)
             
             if donor_id in current_month_dict:
-                # Donor gave this month
                 current_gift = current_month_dict[donor_id]['amount']
                 change = current_gift - typical_amount
                 change_percent = (change / typical_amount * 100) if typical_amount > 0 else 0
@@ -359,16 +319,16 @@ class BIMIFetcher:
                     'change_percent': change_percent
                 }
                 
-                if frequency == "One-Time" or confidence == "Low":
+                # SMART CLASSIFICATION: Only show as "new" if truly new
+                if len(history) == 1:  # Only one previous gift
                     new_donors.append(donor_data)
-                elif abs(change_percent) > 25:  # Significant change
+                elif abs(change_percent) > 50:  # Only major changes
                     changed_donors.append(donor_data)
                 else:
                     normal_donors.append(donor_data)
             else:
-                # Donor didn't give this month - check if they should have
+                # Donor didn't give this month
                 if frequency != "One-Time" and confidence in ["High", "Medium"]:
-                    # Check if they're overdue
                     last_gift_date = max([g['date'] for g in history])
                     last_year, last_month = map(int, last_gift_date.split('-'))
                     current_year, current_month = datetime.now().year, datetime.now().month
@@ -424,14 +384,11 @@ def login():
     if fetcher.login_to_bimi(credentials):
         print("✅ Login successful!")
         
-        # Quick collect donor history for immediate display (only 3 months)
-        donor_history = fetcher.collect_donor_history_quick(credentials, months=3)
-        
-        # Store in session
+        # Initialize session for progressive loading
         session['bimi_credentials'] = credentials
-        session['donor_history'] = donor_history
-        session['history_complete'] = False  # Mark as incomplete
-        print(f"💾 Stored quick donor history for {len(donor_history)} donors")
+        session['donor_history'] = {}
+        session['months_collected'] = 0
+        session['history_complete'] = False
         
         return redirect(url_for('dashboard'))
     else:
@@ -444,10 +401,6 @@ def dashboard():
         return redirect(url_for('login_page'))
     
     credentials = session['bimi_credentials']
-    donor_history = session.get('donor_history', {})
-    
-    print(f"📊 Loading dashboard with history for {len(donor_history)} donors")
-    
     fetcher = BIMIFetcher()
     
     # Calculate report month (previous month)
@@ -455,11 +408,11 @@ def dashboard():
     report_month = current_date.replace(day=1) - timedelta(days=1)
     report_display = report_month.strftime('%B %Y')
     
-    # Get current month data (the report month)
+    # Get current month data first (fast)
     year = report_month.year
     month = report_month.month
     
-    print(f"📊 Fetching report data for {report_display} ({month}/{year})...")
+    print(f"📊 Fetching current month data for {report_display}...")
     current_data = fetcher.fetch_monthly_data(year, month, credentials)
     
     if not current_data:
@@ -467,9 +420,56 @@ def dashboard():
     
     current_donors = current_data.get('donors', [])
     
-    # Get last 6 months for average calculation (reduced from 12 for speed)
+    # Progressive 12-month data collection
+    donor_history = session.get('donor_history', {})
+    months_collected = session.get('months_collected', 0)
+    total_months = 12
+    
+    # Collect data progressively
+    if months_collected < total_months:
+        months_to_collect = min(3, total_months - months_collected)
+        
+        for i in range(months_to_collect):
+            month_offset = months_collected + i
+            month_date = current_date.replace(day=1)
+            
+            for _ in range(month_offset):
+                if month_date.month == 1:
+                    month_date = month_date.replace(year=month_date.year-1, month=12)
+                else:
+                    month_date = month_date.replace(month=month_date.month-1)
+            
+            year_val = month_date.year
+            month_val = month_date.month
+            
+            print(f"📅 Collecting historical data {months_collected + i + 1}/{total_months}: {year_val}-{month_val:02d}")
+            month_data = fetcher.fetch_monthly_data(year_val, month_val, credentials)
+            
+            if month_data and month_data.get('donors'):
+                for donor in month_data['donors']:
+                    donor_id = donor['donor_number']
+                    if donor_id not in donor_history:
+                        donor_history[donor_id] = []
+                    
+                    month_key = f"{year_val}-{month_val:02d}"
+                    existing_dates = [g['date'] for g in donor_history[donor_id]]
+                    if month_key not in existing_dates:
+                        donor_history[donor_id].append({
+                            'date': month_key,
+                            'amount': donor['amount'],
+                            'name': donor['name'],
+                            'city': donor['city'],
+                            'state': donor['state']
+                        })
+        
+        months_collected += months_to_collect
+        session['donor_history'] = donor_history
+        session['months_collected'] = months_collected
+        session['history_complete'] = (months_collected >= total_months)
+    
+    # Get 12 months for average calculation (use available data)
     months_data = []
-    for i in range(6):  # Reduced to 6 months for speed
+    for i in range(min(12, months_collected)):
         month_date = current_date.replace(day=1)
         for _ in range(i):
             if month_date.month == 1:
@@ -488,23 +488,19 @@ def dashboard():
                 'net_cash': month_data['net_cash']
             })
     
-    # Calculate robust 6-month average (remove highest and lowest)
+    # Calculate robust 12-month average
     if months_data:
-        # Extract just the donation amounts
         amounts = [m['gross_donations'] for m in months_data]
         
         if len(amounts) >= 3:
-            # Sort and remove highest and lowest (trimmed mean)
             sorted_amounts = sorted(amounts)
-            trimmed_amounts = sorted_amounts[1:-1]  # Remove first (lowest) and last (highest)
+            trimmed_amounts = sorted_amounts[1:-1]
             avg_gross = sum(trimmed_amounts) / len(trimmed_amounts)
-            print(f"📊 Robust average: ${avg_gross:,.2f} (removed high: ${sorted_amounts[-1]:,.2f}, low: ${sorted_amounts[0]:,.2f})")
+            print(f"📊 Robust 12-month average: ${avg_gross:,.2f}")
         else:
-            # Fallback to regular average if not enough data
             avg_gross = sum(amounts) / len(amounts)
-            print(f"📊 Regular average: ${avg_gross:,.2f} (not enough data for robust average)")
+            print(f"📊 Regular average: ${avg_gross:,.2f}")
         
-        # Calculate differences for display
         for month_data in months_data:
             dollar_diff = month_data['gross_donations'] - avg_gross
             percent_diff = (dollar_diff / avg_gross) * 100
@@ -515,15 +511,11 @@ def dashboard():
         avg_gross = 0
         current_month = None
     
-    # Classify donors using the stored history
-    print(f"🔍 Classifying {len(current_donors)} current donors...")
-    new_donors, changed_donors, missed_donors, normal_donors = fetcher.classify_donors(current_donors, donor_history)
+    # Classify donors with smart classification
+    new_donors, changed_donors, missed_donors, normal_donors = fetcher.classify_donors_smart(current_donors, donor_history)
     
-    print(f"📋 Classification results:")
-    print(f"   🆕 NEW: {len(new_donors)}")
-    print(f"   📈 CHANGED: {len(changed_donors)}")
-    print(f"   ❌ MISSED: {len(missed_donors)}")
-    print(f"   ✅ NORMAL: {len(normal_donors)}")
+    print(f"📋 Progress: {months_collected}/{total_months} months collected")
+    print(f"📋 Classification: {len(new_donors)} new, {len(normal_donors)} normal, {len(changed_donors)} changed")
     
     return render_template('dashboard.html', 
                          months_data=months_data,
@@ -536,6 +528,8 @@ def dashboard():
                          total_donors=len(current_donors),
                          report_display=report_display,
                          current_date=current_date,
+                         months_collected=months_collected,
+                         total_months=total_months,
                          history_complete=session.get('history_complete', False))
 
 @app.route('/logout')
