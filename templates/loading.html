@@ -1,0 +1,199 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Loading Your Data - BIMI Analytics</title>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+        }
+        
+        .loading-container {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100vh;
+            text-align: center;
+            padding: 20px;
+        }
+        
+        .logo {
+            font-size: 2.5rem;
+            font-weight: bold;
+            margin-bottom: 10px;
+        }
+        
+        .subtitle {
+            font-size: 1.2rem;
+            opacity: 0.9;
+            margin-bottom: 40px;
+        }
+        
+        .spinner {
+            border: 6px solid rgba(255, 255, 255, 0.3);
+            border-top: 6px solid white;
+            border-radius: 50%;
+            width: 80px;
+            height: 80px;
+            animation: spin 1.5s linear infinite;
+            margin-bottom: 30px;
+        }
+        
+        .progress-container {
+            width: 100%;
+            max-width: 400px;
+            margin: 20px 0;
+        }
+        
+        .progress-text {
+            margin-bottom: 10px;
+            font-size: 1.1rem;
+        }
+        
+        .progress-bar {
+            width: 100%;
+            height: 12px;
+            background-color: rgba(255, 255, 255, 0.2);
+            border-radius: 6px;
+            overflow: hidden;
+        }
+        
+        .progress-fill {
+            height: 100%;
+            background-color: white;
+            width: 0%;
+            transition: width 0.5s ease;
+            border-radius: 6px;
+        }
+        
+        .status-message {
+            margin-top: 20px;
+            font-size: 0.9rem;
+            opacity: 0.8;
+            max-width: 500px;
+            line-height: 1.5;
+        }
+        
+        .details {
+            margin-top: 30px;
+            font-size: 0.8rem;
+            opacity: 0.7;
+        }
+        
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        
+        .pulse {
+            animation: pulse 2s infinite;
+        }
+        
+        @keyframes pulse {
+            0% { opacity: 1; }
+            50% { opacity: 0.7; }
+            100% { opacity: 1; }
+        }
+    </style>
+</head>
+<body>
+    <div class="loading-container">
+        <div class="logo">BIMI Analytics</div>
+        <div class="subtitle">Missionary Financial Insights</div>
+        
+        <div class="spinner"></div>
+        
+        <div class="progress-container">
+            <div class="progress-text" id="progressText">Initializing data load...</div>
+            <div class="progress-bar">
+                <div class="progress-fill" id="progressFill"></div>
+            </div>
+        </div>
+        
+        <div class="status-message" id="statusMessage">
+            Gathering 12 months of financial history from BIMI. 
+            This usually takes 30-60 seconds...
+        </div>
+        
+        <div class="details">
+            <div>✓ Secure connection established</div>
+            <div>✓ BIMI credentials verified</div>
+            <div id="currentAction">⏳ Starting data retrieval...</div>
+        </div>
+    </div>
+
+    <script>
+        let startTime = Date.now();
+        let estimatedTotalTime = 60000; // 60 seconds estimate
+        
+        // Update progress bar based on elapsed time
+        function updateProgress() {
+            const elapsed = Date.now() - startTime;
+            const progress = Math.min((elapsed / estimatedTotalTime) * 100, 95);
+            
+            document.getElementById('progressFill').style.width = progress + '%';
+            
+            if (progress < 25) {
+                document.getElementById('progressText').textContent = 'Loading current month data...';
+                document.getElementById('currentAction').textContent = '📊 Retrieving current financial statement';
+            } else if (progress < 50) {
+                document.getElementById('progressText').textContent = 'Loading recent history...';
+                document.getElementById('currentAction').textContent = '📅 Gathering last 6 months of donor data';
+            } else if (progress < 75) {
+                document.getElementById('progressText').textContent = 'Loading full history...';
+                document.getElementById('currentAction').textContent = '📈 Collecting complete 12-month history';
+            } else {
+                document.getElementById('progressText').textContent = 'Finalizing analysis...';
+                document.getElementById('currentAction').textContent = '🔍 Analyzing donor patterns and trends';
+            }
+            
+            // Show time elapsed
+            const secondsElapsed = Math.floor(elapsed / 1000);
+            if (secondsElapsed > 10) {
+                document.getElementById('statusMessage').innerHTML = 
+                    `Gathering 12 months of financial history from BIMI.<br>
+                     <small>Elapsed time: ${secondsElapsed} seconds</small>`;
+            }
+        }
+        
+        // Start the actual data loading
+        async function loadData() {
+            try {
+                const response = await fetch('/load-data');
+                const data = await response.json();
+                
+                if (data.status === 'complete') {
+                    // Complete - redirect to dashboard
+                    document.getElementById('progressFill').style.width = '100%';
+                    document.getElementById('progressText').textContent = 'Complete! Redirecting...';
+                    document.getElementById('currentAction').textContent = '✅ Data loaded successfully';
+                    
+                    setTimeout(() => {
+                        window.location.href = '/dashboard';
+                    }, 1000);
+                }
+            } catch (error) {
+                console.error('Loading error:', error);
+                document.getElementById('progressText').textContent = 'Error loading data';
+                document.getElementById('currentAction').textContent = '❌ Failed to load data. Please refresh the page.';
+                document.getElementById('progressFill').style.backgroundColor = '#ff6b6b';
+            }
+        }
+        
+        // Start everything when page loads
+        document.addEventListener('DOMContentLoaded', function() {
+            // Start progress updates
+            setInterval(updateProgress, 500);
+            
+            // Start data loading after a brief delay
+            setTimeout(loadData, 1000);
+        });
+    </script>
+</body>
+</html>
