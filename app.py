@@ -347,7 +347,7 @@ def dashboard():
 
 @app.route('/load-full-history')
 def load_full_history():
-    """Background task to load full history (called after dashboard loads)"""
+    """Background task to load full 12-month history"""
     session_id = session.get('session_id')
     if not session_id or session_id not in data_store:
         return jsonify({'status': 'error', 'message': 'Not authenticated'})
@@ -355,14 +355,16 @@ def load_full_history():
     credentials = data_store[session_id]['credentials']
     fetcher = BIMIFetcher()
     
-    print("📈 Loading full history in background...")
+    print("📈 Loading full 12-month history in background...")
     
     try:
         current_date = datetime.now()
         donor_history = {}
+        total_months = 12
+        loaded_months = 0
         
-        # Load only 6 months instead of 12 to be faster
-        for i in range(6):
+        # Start from current month and go backwards
+        for i in range(total_months):
             month_date = current_date.replace(day=1)
             for _ in range(i):
                 if month_date.month == 1:
@@ -370,6 +372,10 @@ def load_full_history():
                 else:
                     month_date = month_date.replace(month=month_date.month-1)
             
+            # Skip current month (already loaded)
+            if i == 0:
+                continue
+                
             month_data = fetcher.fetch_monthly_data_fast(
                 month_date.year, 
                 month_date.month, 
@@ -377,31 +383,56 @@ def load_full_history():
             )
             
             if month_data and month_data.get('donors'):
+                loaded_months += 1
                 for donor in month_data['donors']:
                     donor_id = donor['donor_number']
                     if donor_id not in donor_history:
                         donor_history[donor_id] = []
                     
                     month_key = f"{month_date.year}-{month_date.month:02d}"
-                    donor_history[donor_id].append({
-                        'date': month_key,
-                        'amount': donor['amount'],
-                        'name': donor['name']
-                    })
+                    # Only add if not already in history
+                    existing_dates = [g['date'] for g in donor_history[donor_id]]
+                    if month_key not in existing_dates:
+                        donor_history[donor_id].append({
+                            'date': month_key,
+                            'amount': donor['amount'],
+                            'name': donor['name'],
+                            'city': donor.get('city', ''),
+                            'state': donor.get('state', '')
+                        })
             
-            time.sleep(0.5)  # Shorter delay
+            # Update progress
+            data_store[session_id]['history_progress'] = (i / total_months) * 100
+            
+            time.sleep(1)  # Respectful delay
         
-        # Update with full history
-        data_store[session_id]['donor_history'] = donor_history
+        # Merge with any existing history and mark as complete
+        existing_history = data_store[session_id].get('donor_history', {})
+        for donor_id, history in donor_history.items():
+            if donor_id in existing_history:
+                # Merge histories, avoiding duplicates
+                existing_dates = [g['date'] for g in existing_history[donor_id]]
+                for gift in history:
+                    if gift['date'] not in existing_dates:
+                        existing_history[donor_id].append(gift)
+            else:
+                existing_history[donor_id] = history
+        
+        data_store[session_id]['donor_history'] = existing_history
         data_store[session_id]['full_history_loaded'] = True
+        data_store[session_id]['history_progress'] = 100
         
-        print(f"✅ Full history loaded: {len(donor_history)} donors")
-        return jsonify({'status': 'complete', 'donors_loaded': len(donor_history)})
+        print(f"✅ Full history loaded: {len(existing_history)} donors across {loaded_months} months")
+        return jsonify({
+            'status': 'complete', 
+            'donors_loaded': len(existing_history),
+            'months_loaded': loaded_months
+        })
         
     except Exception as e:
         print(f"❌ Error loading full history: {e}")
         return jsonify({'status': 'error', 'message': str(e)})
-
+        
 @app.route('/status')
 def status():
     return jsonify({'status': 'ok'})
@@ -426,4 +457,5 @@ def logout():
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port, debug=False)
+
 
