@@ -1,89 +1,252 @@
-<script>
-    let startTime = Date.now();
-    let estimatedTotalTime = 90000; // 90 seconds estimate
-    let retryCount = 0;
-    const maxRetries = 2;
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Loading Your Data - BIMI Analytics</title>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            min-height: 100vh;
+        }
+        
+        .loading-container {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100vh;
+            text-align: center;
+            padding: 20px;
+        }
+        
+        .logo {
+            font-size: 2.5rem;
+            font-weight: bold;
+            margin-bottom: 10px;
+        }
+        
+        .subtitle {
+            font-size: 1.2rem;
+            opacity: 0.9;
+            margin-bottom: 40px;
+        }
+        
+        .spinner {
+            border: 6px solid rgba(255, 255, 255, 0.3);
+            border-top: 6px solid white;
+            border-radius: 50%;
+            width: 80px;
+            height: 80px;
+            animation: spin 1.5s linear infinite;
+            margin-bottom: 30px;
+        }
+        
+        .progress-container {
+            width: 100%;
+            max-width: 400px;
+            margin: 20px 0;
+        }
+        
+        .progress-text {
+            margin-bottom: 10px;
+            font-size: 1.1rem;
+        }
+        
+        .progress-bar {
+            width: 100%;
+            height: 12px;
+            background-color: rgba(255, 255, 255, 0.2);
+            border-radius: 6px;
+            overflow: hidden;
+        }
+        
+        .progress-fill {
+            height: 100%;
+            background-color: white;
+            width: 0%;
+            transition: width 0.5s ease;
+            border-radius: 6px;
+        }
+        
+        .status-message {
+            margin-top: 20px;
+            font-size: 0.9rem;
+            opacity: 0.8;
+            max-width: 500px;
+            line-height: 1.5;
+        }
+        
+        .details {
+            margin-top: 30px;
+            font-size: 0.8rem;
+            opacity: 0.7;
+        }
+        
+        .error-box {
+            background: rgba(255, 255, 255, 0.1);
+            padding: 20px;
+            border-radius: 8px;
+            margin-top: 20px;
+            max-width: 500px;
+        }
+        
+        .retry-button {
+            margin-top: 15px;
+            padding: 10px 20px;
+            background: white;
+            color: #667eea;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 1rem;
+            transition: background 0.3s;
+        }
+        
+        .retry-button:hover {
+            background: #f0f0f0;
+        }
+        
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+    </style>
+</head>
+<body>
+    <div class="loading-container">
+        <div class="logo">BIMI Analytics</div>
+        <div class="subtitle">Missionary Financial Insights</div>
+        
+        <div class="spinner"></div>
+        
+        <div class="progress-container">
+            <div class="progress-text" id="progressText">Initializing data load...</div>
+            <div class="progress-bar">
+                <div class="progress-fill" id="progressFill"></div>
+            </div>
+        </div>
+        
+        <div class="status-message" id="statusMessage">
+            Gathering 12 months of financial history from BIMI. 
+            This usually takes 30-60 seconds...
+        </div>
+        
+        <div class="details">
+            <div>✓ Secure connection established</div>
+            <div>✓ BIMI credentials verified</div>
+            <div id="currentAction">⏳ Starting data retrieval...</div>
+        </div>
+        
+        <div class="error-box" id="errorBox" style="display: none;">
+            <h3>Something went wrong</h3>
+            <p id="errorMessage"></p>
+            <button class="retry-button" onclick="retryLoad()">Try Again</button>
+            <button class="retry-button" onclick="window.location.href='/dashboard'" style="margin-left: 10px;">Try Dashboard Anyway</button>
+        </div>
+    </div>
 
-    function updateProgress() {
-        const elapsed = Date.now() - startTime;
-        const progress = Math.min((elapsed / estimatedTotalTime) * 100, 95);
-        
-        document.getElementById('progressFill').style.width = progress + '%';
-        
-        // Update status messages based on progress
-        const statusMessages = [
-            { threshold: 25, text: 'Loading current month data...', action: '📊 Retrieving current financial statement' },
-            { threshold: 50, text: 'Loading recent history...', action: '📅 Gathering last 6 months of donor data' },
-            { threshold: 75, text: 'Loading full history...', action: '📈 Collecting complete 12-month history' },
-            { threshold: 100, text: 'Finalizing analysis...', action: '🔍 Analyzing donor patterns and trends' }
-        ];
-        
-        const currentStatus = statusMessages.find(status => progress < status.threshold) || statusMessages[3];
-        document.getElementById('progressText').textContent = currentStatus.text;
-        document.getElementById('currentAction').textContent = currentStatus.action;
-        
-        // Show time elapsed
-        const secondsElapsed = Math.floor(elapsed / 1000);
-        document.getElementById('statusMessage').innerHTML = 
-            `Gathering 12 months of financial history from BIMI.<br>
-             <small>Elapsed time: ${secondsElapsed} seconds</small>`;
-    }
+    <script>
+        let startTime = Date.now();
+        let estimatedTotalTime = 90000; // 90 seconds estimate
+        let retryCount = 0;
+        const maxRetries = 3;
 
-    async function loadData() {
-        try {
-            console.log('Starting data load...');
-            const response = await fetch('/load-data');
+        function updateProgress() {
+            const elapsed = Date.now() - startTime;
+            const progress = Math.min((elapsed / estimatedTotalTime) * 100, 95);
             
-            if (!response.ok) {
-                throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-            }
+            document.getElementById('progressFill').style.width = progress + '%';
             
-            const data = await response.json();
-            console.log('Load data response:', data);
+            // Update status messages based on progress
+            const statusMessages = [
+                { threshold: 25, text: 'Loading current month data...', action: '📊 Retrieving current financial statement' },
+                { threshold: 50, text: 'Loading recent history...', action: '📅 Gathering last 6 months of donor data' },
+                { threshold: 75, text: 'Loading full history...', action: '📈 Collecting complete 12-month history' },
+                { threshold: 100, text: 'Finalizing analysis...', action: '🔍 Analyzing donor patterns and trends' }
+            ];
             
-            if (data.status === 'complete') {
-                // Complete - redirect to dashboard with cache busting
-                document.getElementById('progressFill').style.width = '100%';
-                document.getElementById('progressText').textContent = 'Complete! Redirecting...';
-                document.getElementById('currentAction').textContent = '✅ Data loaded successfully';
+            const currentStatus = statusMessages.find(status => progress < status.threshold) || statusMessages[3];
+            document.getElementById('progressText').textContent = currentStatus.text;
+            document.getElementById('currentAction').textContent = currentStatus.action;
+            
+            // Show time elapsed
+            const secondsElapsed = Math.floor(elapsed / 1000);
+            document.getElementById('statusMessage').innerHTML = 
+                `Gathering 12 months of financial history from BIMI.<br>
+                 <small>Elapsed time: ${secondsElapsed} seconds</small>`;
+        }
+
+        function showError(message) {
+            document.getElementById('errorMessage').textContent = message;
+            document.getElementById('errorBox').style.display = 'block';
+            document.getElementById('progressText').textContent = 'Error occurred';
+            document.getElementById('progressFill').style.backgroundColor = '#ff6b6b';
+        }
+
+        function retryLoad() {
+            document.getElementById('errorBox').style.display = 'none';
+            document.getElementById('progressFill').style.backgroundColor = 'white';
+            document.getElementById('progressText').textContent = 'Retrying...';
+            startTime = Date.now();
+            retryCount = 0;
+            loadData();
+        }
+
+        async function loadData() {
+            try {
+                console.log('Starting data load...');
+                const response = await fetch('/load-data');
                 
-                // Force a hard redirect
-                setTimeout(() => {
-                    window.location.href = '/dashboard?t=' + Date.now();
-                }, 1500);
-            } else if (data.status === 'error') {
-                throw new Error(data.message);
-            } else {
-                throw new Error('Unknown response from server');
-            }
-        } catch (error) {
-            console.error('Loading error:', error);
-            
-            if (retryCount < maxRetries) {
-                retryCount++;
-                document.getElementById('progressText').textContent = `Retrying... (${retryCount}/${maxRetries})`;
-                document.getElementById('currentAction').textContent = '🔄 Connection issue, retrying...';
+                if (!response.ok) {
+                    throw new Error(`Server error: ${response.status} ${response.statusText}`);
+                }
                 
-                setTimeout(loadData, 3000);
-            } else {
-                document.getElementById('progressText').textContent = 'Error loading data';
-                document.getElementById('currentAction').textContent = '❌ Failed to load data. Please try refreshing.';
-                document.getElementById('progressFill').style.backgroundColor = '#ff6b6b';
-                document.getElementById('statusMessage').innerHTML = 
-                    `Error: ${error.message}<br>
-                     <button onclick="window.location.href='/dashboard'" style="margin-top: 10px; padding: 8px 16px; background: white; color: #667eea; border: none; border-radius: 4px; cursor: pointer;">
-                         Try Dashboard Anyway
-                     </button>`;
+                const data = await response.json();
+                console.log('Load data response:', data);
+                
+                if (data.status === 'complete') {
+                    // Complete - redirect to dashboard with cache busting
+                    document.getElementById('progressFill').style.width = '100%';
+                    document.getElementById('progressText').textContent = 'Complete! Redirecting...';
+                    document.getElementById('currentAction').textContent = '✅ Data loaded successfully';
+                    
+                    // Force a hard redirect
+                    setTimeout(() => {
+                        window.location.href = '/dashboard?t=' + Date.now();
+                    }, 1500);
+                } else if (data.status === 'error') {
+                    throw new Error(data.message || 'Unknown server error');
+                } else {
+                    throw new Error('Invalid response from server');
+                }
+            } catch (error) {
+                console.error('Loading error:', error);
+                
+                if (retryCount < maxRetries) {
+                    retryCount++;
+                    document.getElementById('progressText').textContent = `Retrying... (${retryCount}/${maxRetries})`;
+                    document.getElementById('currentAction').textContent = '🔄 Connection issue, retrying...';
+                    
+                    setTimeout(loadData, 3000);
+                } else {
+                    showError(error.message);
+                }
             }
         }
-    }
 
-    // Start everything when page loads
-    document.addEventListener('DOMContentLoaded', function() {
-        // Start progress updates
-        const progressInterval = setInterval(updateProgress, 500);
-        
-        // Start data loading after a brief delay
-        setTimeout(loadData, 1000);
-    });
-</script>
+        // Start everything when page loads
+        document.addEventListener('DOMContentLoaded', function() {
+            // Start progress updates
+            const progressInterval = setInterval(updateProgress, 500);
+            
+            // Start data loading after a brief delay
+            setTimeout(loadData, 1000);
+        });
+    </script>
+</body>
+</html>
