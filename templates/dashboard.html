@@ -39,9 +39,15 @@
             margin-bottom: 5px;
         }
         
-        .header p {
+        .header .report-period {
             opacity: 0.9;
             font-size: 16px;
+            margin-bottom: 5px;
+        }
+        
+        .header .generated-date {
+            opacity: 0.7;
+            font-size: 14px;
         }
         
         .logout-btn {
@@ -219,19 +225,20 @@
         <div class="header">
             <a href="/logout" class="logout-btn">Log Out</a>
             <h1>Missionary Financial Dashboard</h1>
-            <p>6-Month Overview & Donor Analytics</p>
+            <div class="report-period">📋 FINANCIAL REPORT: {{ report_display }}</div>
+            <div class="generated-date">Generated on {{ current_date.strftime('%B %d, %Y') }}</div>
         </div>
         
         <!-- Summary Cards -->
         <div class="summary-cards">
             <div class="card">
-                <h3>6-MONTH AVERAGE</h3>
+                <h3>12-MONTH AVERAGE</h3>
                 <div class="number">${{ "%.0f"|format(average_gross) }}</div>
                 <div class="subtext">Gross Donations</div>
             </div>
             
             <div class="card">
-                <h3>CURRENT MONTH</h3>
+                <h3>REPORT MONTH</h3>
                 <div class="number">
                     {% if current_month %}
                         ${{ "%.0f"|format(current_month.gross_donations) }}
@@ -249,9 +256,9 @@
             </div>
         </div>
         
-        <!-- 6-Month History -->
+        <!-- 12-Month History -->
         <div class="section">
-            <h2>📊 6-Month Giving History</h2>
+            <h2>📊 12-Month Giving History</h2>
             <table>
                 <thead>
                     <tr>
