@@ -6,11 +6,14 @@ import os
 import json
 from collections import Counter
 import time
+import hashlib
 
 app = Flask(__name__)
 app.secret_key = os.environ.get('SECRET_KEY', 'dev-key-change-in-production')
 
-# BIMI Data Fetcher with Enhanced Analytics
+# In-memory storage for data (for development - use Redis in production)
+data_store = {}
+
 class BIMIFetcher:
     def __init__(self):
         self.session = requests.Session()
@@ -361,6 +364,11 @@ class BIMIFetcher:
         
         return new_donors, changed_donors, missed_donors, normal_donors
 
+def generate_session_id(credentials):
+    """Generate a unique session ID based on credentials"""
+    cred_string = f"{credentials['account_number']}_{credentials['user_name']}"
+    return hashlib.md5(cred_string.encode()).hexdigest()
+
 # Routes
 @app.route('/')
 def login_page():
@@ -385,9 +393,17 @@ def login():
     if fetcher.login_to_bimi(credentials):
         print("✅ Login successful!")
         
-        # Initialize session for complete data loading
+        # Generate session ID and store credentials
+        session_id = generate_session_id(credentials)
+        session['session_id'] = session_id
         session['bimi_credentials'] = credentials
-        session['data_loaded'] = False  # Flag to track if data is fully loaded
+        
+        # Initialize data store for this session
+        data_store[session_id] = {
+            'data_loaded': False,
+            'donor_history': {},
+            'credentials': credentials
+        }
         
         return redirect(url_for('dashboard'))
     else:
@@ -397,10 +413,11 @@ def login():
 @app.route('/load-data')
 def load_data():
     """Background endpoint to load all historical data"""
-    if 'bimi_credentials' not in session:
+    session_id = session.get('session_id')
+    if not session_id or session_id not in data_store:
         return jsonify({'status': 'error', 'message': 'Not authenticated'})
     
-    credentials = session['bimi_credentials']
+    credentials = data_store[session_id]['credentials']
     fetcher = BIMIFetcher()
     
     print("🚀 Starting complete data load...")
@@ -447,8 +464,8 @@ def load_data():
             # Small delay to be respectful to API
             time.sleep(1.5)
         
-        # CRITICAL FIX: Update session properly
-        session.update({
+        # Update data store
+        data_store[session_id].update({
             'donor_history': donor_history,
             'data_loaded': True
         })
@@ -458,7 +475,8 @@ def load_data():
         return jsonify({
             'status': 'complete', 
             'donors_loaded': len(donor_history),
-            'months_loaded': successful_months
+            'months_loaded': successful_months,
+            'session_id': session_id
         })
         
     except Exception as e:
@@ -469,23 +487,26 @@ def load_data():
 
 @app.route('/dashboard')
 def dashboard():
-    if 'bimi_credentials' not in session:
-        print("❌ No credentials in session, redirecting to login")
+    session_id = session.get('session_id')
+    
+    if not session_id or session_id not in data_store:
+        print("❌ No valid session, redirecting to login")
         return redirect(url_for('login_page'))
     
+    session_data = data_store[session_id]
+    
     # Debug session state
-    print(f"🔍 Dashboard session check - data_loaded: {session.get('data_loaded')}")
-    print(f"🔍 Session keys: {list(session.keys())}")
+    print(f"🔍 Dashboard session check - data_loaded: {session_data.get('data_loaded')}")
     
     # Show loading screen if data isn't loaded yet
-    if not session.get('data_loaded'):
+    if not session_data.get('data_loaded'):
         print("🔄 Data not loaded yet, showing loading screen")
         return render_template('loading.html')
     
     print("✅ Data loaded, showing dashboard")
     
     # Data is loaded, show the actual dashboard
-    credentials = session['bimi_credentials']
+    credentials = session_data['credentials']
     fetcher = BIMIFetcher()
     
     # Calculate report month (previous month)
@@ -504,7 +525,7 @@ def dashboard():
         return "Failed to fetch current month data", 500
     
     current_donors = current_data.get('donors', [])
-    donor_history = session.get('donor_history', {})
+    donor_history = session_data.get('donor_history', {})
     
     # Get monthly data for charts and averages
     months_data = []
@@ -580,16 +601,22 @@ def dashboard():
 
 @app.route('/debug-session')
 def debug_session():
+    session_id = session.get('session_id')
     return jsonify({
+        'session_id': session_id,
         'session_keys': list(session.keys()),
-        'data_loaded': session.get('data_loaded'),
+        'data_store_keys': list(data_store.keys()) if session_id else [],
+        'data_loaded': data_store.get(session_id, {}).get('data_loaded') if session_id else None,
         'has_credentials': 'bimi_credentials' in session,
-        'donor_history_count': len(session.get('donor_history', {}))
+        'donor_history_count': len(data_store.get(session_id, {}).get('donor_history', {})) if session_id else 0
     })
 
 @app.route('/logout')
 def logout():
     """Clear the session"""
+    session_id = session.get('session_id')
+    if session_id and session_id in data_store:
+        del data_store[session_id]
     session.clear()
     return redirect(url_for('login_page'))
 
