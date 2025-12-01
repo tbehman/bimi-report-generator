@@ -5,6 +5,7 @@ import re
 import os
 import json
 from collections import Counter
+import threading
 
 app = Flask(__name__)
 app.secret_key = os.environ.get('SECRET_KEY', 'dev-key-change-in-production')
@@ -62,12 +63,19 @@ class BIMIFetcher:
             if not self.login_to_bimi(credentials):
                 return None
         
-        response = self.session.get(text_url, params=params, headers=self.headers)
-        
-        if response.status_code == 200:
-            return response.text
-        else:
-            print(f"❌ Failed to fetch data for {month}/{year}: {response.status_code}")
+        try:
+            response = self.session.get(text_url, params=params, headers=self.headers, timeout=30)
+            
+            if response.status_code == 200:
+                return response.text
+            else:
+                print(f"❌ Failed to fetch data for {month}/{year}: {response.status_code}")
+                return None
+        except requests.exceptions.Timeout:
+            print(f"⏰ Timeout fetching data for {month}/{year}")
+            return None
+        except Exception as e:
+            print(f"❌ Error fetching data for {month}/{year}: {e}")
             return None
 
     def is_address_line(self, line):
@@ -227,14 +235,15 @@ class BIMIFetcher:
         print(f"   📊 Totals: Gross=${totals['gross_donations']:,.2f}, Net=${totals['net_cash']:,.2f}")
         return totals
 
-    def collect_donor_history(self, credentials, months=12):
-        """Collect donor history for pattern analysis"""
-        print(f"\n🕐 COLLECTING {months} MONTHS OF DONOR HISTORY...")
+    def collect_donor_history_quick(self, credentials, months=6):
+        """Quick donor history collection for immediate dashboard display"""
+        print(f"\n⚡ QUICK COLLECTING {months} MONTHS OF DONOR HISTORY...")
         
         today = datetime.now()
         donor_history = {}
         
-        for i in range(months):
+        # Only collect recent months for quick display
+        for i in range(min(months, 3)):  # Start with just 3 months for speed
             month_date = today.replace(day=1)
             for _ in range(i):
                 if month_date.month == 1:
@@ -245,7 +254,7 @@ class BIMIFetcher:
             year = month_date.year
             month = month_date.month
             
-            print(f"📅 Analyzing {year}-{month:02d}...")
+            print(f"📅 Quick analyzing {year}-{month:02d}...")
             data = self.fetch_monthly_data(year, month, credentials)
             
             if data and data.get('donors'):
@@ -262,7 +271,7 @@ class BIMIFetcher:
                         'state': donor['state']
                     })
         
-        print(f"✅ Collected history for {len(donor_history)} unique donors")
+        print(f"✅ Quick collected history for {len(donor_history)} unique donors")
         return donor_history
 
     def analyze_giving_pattern(self, donor_id, donor_history):
@@ -416,13 +425,14 @@ def login():
     if fetcher.login_to_bimi(credentials):
         print("✅ Login successful!")
         
-        # Collect donor history for analysis (now 12 months)
-        donor_history = fetcher.collect_donor_history(credentials, months=12)
+        # Quick collect donor history for immediate display (only 3 months)
+        donor_history = fetcher.collect_donor_history_quick(credentials, months=3)
         
         # Store in session
         session['bimi_credentials'] = credentials
         session['donor_history'] = donor_history
-        print(f"💾 Stored donor history for {len(donor_history)} donors")
+        session['history_complete'] = False  # Mark as incomplete
+        print(f"💾 Stored quick donor history for {len(donor_history)} donors")
         
         return redirect(url_for('dashboard'))
     else:
@@ -458,9 +468,9 @@ def dashboard():
     
     current_donors = current_data.get('donors', [])
     
-    # Get last 12 months for average calculation
+    # Get last 6 months for average calculation (reduced from 12 for speed)
     months_data = []
-    for i in range(12):
+    for i in range(6):  # Reduced to 6 months for speed
         month_date = current_date.replace(day=1)
         for _ in range(i):
             if month_date.month == 1:
@@ -479,7 +489,7 @@ def dashboard():
                 'net_cash': month_data['net_cash']
             })
     
-    # Calculate 12-month average and enhancements
+    # Calculate 6-month average and enhancements
     if months_data:
         avg_gross = sum(m['gross_donations'] for m in months_data) / len(months_data)
         for month_data in months_data:
@@ -512,7 +522,8 @@ def dashboard():
                          normal_donors=normal_donors,
                          total_donors=len(current_donors),
                          report_display=report_display,
-                         current_date=current_date)
+                         current_date=current_date,
+                         history_complete=session.get('history_complete', False))
 
 @app.route('/logout')
 def logout():
