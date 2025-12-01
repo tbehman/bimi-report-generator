@@ -1,10 +1,11 @@
-from flask import Flask, render_template, request, session, redirect, url_for
+from flask import Flask, render_template, request, session, redirect, url_for, jsonify
 import requests
 from datetime import datetime, timedelta
 import re
 import os
 import json
 from collections import Counter
+import time
 
 app = Flask(__name__)
 app.secret_key = os.environ.get('SECRET_KEY', 'dev-key-change-in-production')
@@ -384,11 +385,9 @@ def login():
     if fetcher.login_to_bimi(credentials):
         print("✅ Login successful!")
         
-        # Initialize session for progressive loading
+        # Initialize session for complete data loading
         session['bimi_credentials'] = credentials
-        session['donor_history'] = {}
-        session['months_collected'] = 0
-        session['history_complete'] = False
+        session['data_loaded'] = False  # Flag to track if data is fully loaded
         
         return redirect(url_for('dashboard'))
     else:
@@ -400,6 +399,11 @@ def dashboard():
     if 'bimi_credentials' not in session:
         return redirect(url_for('login_page'))
     
+    # Show loading screen if data isn't loaded yet
+    if not session.get('data_loaded'):
+        return render_template('loading.html')
+    
+    # Data is loaded, show the actual dashboard
     credentials = session['bimi_credentials']
     fetcher = BIMIFetcher()
     
@@ -408,68 +412,22 @@ def dashboard():
     report_month = current_date.replace(day=1) - timedelta(days=1)
     report_display = report_month.strftime('%B %Y')
     
-    # Get current month data first (fast)
+    # Get current month data
     year = report_month.year
     month = report_month.month
     
-    print(f"📊 Fetching current month data for {report_display}...")
+    print(f"📊 Getting current month data for dashboard...")
     current_data = fetcher.fetch_monthly_data(year, month, credentials)
     
     if not current_data:
         return "Failed to fetch current month data", 500
     
     current_donors = current_data.get('donors', [])
-    
-    # Progressive 12-month data collection
     donor_history = session.get('donor_history', {})
-    months_collected = session.get('months_collected', 0)
-    total_months = 12
     
-    # Collect data progressively
-    if months_collected < total_months:
-        months_to_collect = min(3, total_months - months_collected)
-        
-        for i in range(months_to_collect):
-            month_offset = months_collected + i
-            month_date = current_date.replace(day=1)
-            
-            for _ in range(month_offset):
-                if month_date.month == 1:
-                    month_date = month_date.replace(year=month_date.year-1, month=12)
-                else:
-                    month_date = month_date.replace(month=month_date.month-1)
-            
-            year_val = month_date.year
-            month_val = month_date.month
-            
-            print(f"📅 Collecting historical data {months_collected + i + 1}/{total_months}: {year_val}-{month_val:02d}")
-            month_data = fetcher.fetch_monthly_data(year_val, month_val, credentials)
-            
-            if month_data and month_data.get('donors'):
-                for donor in month_data['donors']:
-                    donor_id = donor['donor_number']
-                    if donor_id not in donor_history:
-                        donor_history[donor_id] = []
-                    
-                    month_key = f"{year_val}-{month_val:02d}"
-                    existing_dates = [g['date'] for g in donor_history[donor_id]]
-                    if month_key not in existing_dates:
-                        donor_history[donor_id].append({
-                            'date': month_key,
-                            'amount': donor['amount'],
-                            'name': donor['name'],
-                            'city': donor['city'],
-                            'state': donor['state']
-                        })
-        
-        months_collected += months_to_collect
-        session['donor_history'] = donor_history
-        session['months_collected'] = months_collected
-        session['history_complete'] = (months_collected >= total_months)
-    
-    # Get 12 months for average calculation (use available data)
+    # Get monthly data for charts and averages
     months_data = []
-    for i in range(min(12, months_collected)):
+    for i in range(12):
         month_date = current_date.replace(day=1)
         for _ in range(i):
             if month_date.month == 1:
@@ -479,13 +437,24 @@ def dashboard():
         
         year_val = month_date.year
         month_val = month_date.month
+        month_key = f"{year_val}-{month_val:02d}"
         
-        month_data = fetcher.fetch_monthly_data(year_val, month_val, credentials)
-        if month_data and month_data['gross_donations'] > 0:
+        # Calculate totals from donor history
+        month_gross = 0
+        month_donors = []
+        
+        for donor_id, history in donor_history.items():
+            for gift in history:
+                if gift['date'] == month_key:
+                    month_gross += gift['amount']
+                    month_donors.append(gift)
+        
+        if month_gross > 0:
             months_data.append({
                 'month': f"{month_date.strftime('%B %Y')}",
-                'gross_donations': month_data['gross_donations'],
-                'net_cash': month_data['net_cash']
+                'gross_donations': month_gross,
+                'net_cash': month_gross,  # Simplified for now
+                'donor_count': len(month_donors)
             })
     
     # Calculate robust 12-month average
@@ -514,8 +483,7 @@ def dashboard():
     # Classify donors with smart classification
     new_donors, changed_donors, missed_donors, normal_donors = fetcher.classify_donors_smart(current_donors, donor_history)
     
-    print(f"📋 Progress: {months_collected}/{total_months} months collected")
-    print(f"📋 Classification: {len(new_donors)} new, {len(normal_donors)} normal, {len(changed_donors)} changed")
+    print(f"📋 Final Classification: {len(new_donors)} new, {len(normal_donors)} normal, {len(changed_donors)} changed, {len(missed_donors)} missed")
     
     return render_template('dashboard.html', 
                          months_data=months_data,
@@ -527,10 +495,65 @@ def dashboard():
                          normal_donors=normal_donors,
                          total_donors=len(current_donors),
                          report_display=report_display,
-                         current_date=current_date,
-                         months_collected=months_collected,
-                         total_months=total_months,
-                         history_complete=session.get('history_complete', False))
+                         current_date=current_date)
+
+@app.route('/load-data')
+def load_data():
+    """Background endpoint to load all historical data"""
+    if 'bimi_credentials' not in session:
+        return jsonify({'status': 'error', 'message': 'Not authenticated'})
+    
+    credentials = session['bimi_credentials']
+    fetcher = BIMIFetcher()
+    
+    print("🚀 Starting complete data load...")
+    
+    current_date = datetime.now()
+    donor_history = {}
+    total_months = 12
+    
+    # Load current month + 11 previous months
+    for i in range(total_months):
+        month_date = current_date.replace(day=1)
+        for _ in range(i):
+            if month_date.month == 1:
+                month_date = month_date.replace(year=month_date.year-1, month=12)
+            else:
+                month_date = month_date.replace(month=month_date.month-1)
+        
+        year_val = month_date.year
+        month_val = month_date.month
+        
+        print(f"📅 Loading data {i+1}/{total_months}: {year_val}-{month_val:02d}")
+        month_data = fetcher.fetch_monthly_data(year_val, month_val, credentials)
+        
+        if month_data and month_data.get('donors'):
+            for donor in month_data['donors']:
+                donor_id = donor['donor_number']
+                if donor_id not in donor_history:
+                    donor_history[donor_id] = []
+                
+                month_key = f"{year_val}-{month_val:02d}"
+                existing_dates = [g['date'] for g in donor_history[donor_id]]
+                if month_key not in existing_dates:
+                    donor_history[donor_id].append({
+                        'date': month_key,
+                        'amount': donor['amount'],
+                        'name': donor['name'],
+                        'city': donor['city'],
+                        'state': donor['state']
+                    })
+        
+        # Small delay to be respectful to API (1-2 seconds between requests)
+        time.sleep(1.5)
+    
+    # Store complete data in session
+    session['donor_history'] = donor_history
+    session['data_loaded'] = True
+    
+    print(f"✅ Data loading complete! Loaded {len(donor_history)} unique donors across {total_months} months")
+    
+    return jsonify({'status': 'complete', 'donors_loaded': len(donor_history)})
 
 @app.route('/logout')
 def logout():
