@@ -11,8 +11,23 @@ import hashlib
 app = Flask(__name__)
 app.secret_key = os.environ.get('SECRET_KEY', 'dev-key-change-in-production')
 
-# CONFIGURATION - Easy to change!
-MONTHS_OF_HISTORY = 12  # Change this to 6, 9, 12, etc.
+# CONFIGURATION - 6 months for reliability
+MONTHS_OF_HISTORY = 6
+
+# US State abbreviations for validation
+US_STATES = {
+    'AL': 'Alabama', 'AK': 'Alaska', 'AZ': 'Arizona', 'AR': 'Arkansas', 'CA': 'California',
+    'CO': 'Colorado', 'CT': 'Connecticut', 'DE': 'Delaware', 'FL': 'Florida', 'GA': 'Georgia',
+    'HI': 'Hawaii', 'ID': 'Idaho', 'IL': 'Illinois', 'IN': 'Indiana', 'IA': 'Iowa',
+    'KS': 'Kansas', 'KY': 'Kentucky', 'LA': 'Louisiana', 'ME': 'Maine', 'MD': 'Maryland',
+    'MA': 'Massachusetts', 'MI': 'Michigan', 'MN': 'Minnesota', 'MS': 'Mississippi', 'MO': 'Missouri',
+    'MT': 'Montana', 'NE': 'Nebraska', 'NV': 'Nevada', 'NH': 'New Hampshire', 'NJ': 'New Jersey',
+    'NM': 'New Mexico', 'NY': 'New York', 'NC': 'North Carolina', 'ND': 'North Dakota', 'OH': 'Ohio',
+    'OK': 'Oklahoma', 'OR': 'Oregon', 'PA': 'Pennsylvania', 'RI': 'Rhode Island', 'SC': 'South Carolina',
+    'SD': 'South Dakota', 'TN': 'Tennessee', 'TX': 'Texas', 'UT': 'Utah', 'VT': 'Vermont',
+    'VA': 'Virginia', 'WA': 'Washington', 'WV': 'West Virginia', 'WI': 'Wisconsin', 'WY': 'Wyoming',
+    'DC': 'District of Columbia'
+}
 
 # In-memory storage for data
 data_store = {}
@@ -85,8 +100,137 @@ class BIMIFetcher:
             print(f"❌ Error fetching {month}/{year}: {e}")
             return None
 
+    def normalize_city_name(self, city):
+        """Normalize city name capitalization"""
+        if not city:
+            return ''
+        
+        # Common city name exceptions
+        exceptions = {
+            'st': 'St.',
+            'saint': 'St.',
+            'ft': 'Ft.',
+            'fort': 'Ft.',
+            'mt': 'Mt.',
+            'mount': 'Mt.',
+            'new york': 'New York',
+            'los angeles': 'Los Angeles',
+            'san francisco': 'San Francisco',
+            'san diego': 'San Diego',
+            'grand rapids': 'Grand Rapids',
+            'spring hill': 'Spring Hill',
+            'colorado springs': 'Colorado Springs',
+            'kansas city': 'Kansas City',
+            'las vegas': 'Las Vegas',
+            'oak brook': 'Oak Brook',
+            'mount pleasant': 'Mt. Pleasant',
+            'st louis': 'St. Louis',
+            'st paul': 'St. Paul',
+            'st petersburg': 'St. Petersburg'
+        }
+        
+        city_lower = city.strip().lower()
+        
+        # Check for exceptions first
+        if city_lower in exceptions:
+            return exceptions[city_lower]
+        
+        # Handle Mc/Mac names
+        if city_lower.startswith('mc'):
+            parts = city.split()
+            normalized_parts = []
+            for part in parts:
+                if part.lower().startswith('mc'):
+                    # McXXX -> McXxx (capitalize third letter too)
+                    if len(part) > 2:
+                        part = 'Mc' + part[2:].capitalize()
+                else:
+                    part = part.capitalize()
+                normalized_parts.append(part)
+            return ' '.join(normalized_parts)
+        
+        # Standard capitalization: Title case with exceptions
+        words = city.split()
+        capitalized_words = []
+        
+        for word in words:
+            if '-' in word:
+                # Handle hyphenated names
+                sub_words = word.split('-')
+                capitalized_sub_words = []
+                for sub_word in sub_words:
+                    if sub_word.lower() in ['st', 'fort', 'mount', 'saint']:
+                        capitalized_sub_words.append(sub_word.capitalize())
+                    else:
+                        capitalized_sub_words.append(sub_word.capitalize())
+                capitalized_words.append('-'.join(capitalized_sub_words))
+            else:
+                capitalized_words.append(word.capitalize())
+        
+        return ' '.join(capitalized_words)
+
+    def normalize_state_name(self, state):
+        """Validate and normalize state abbreviation"""
+        if not state:
+            return ''
+        
+        state = state.strip().upper()
+        
+        # Validate it's a US state
+        if state in US_STATES:
+            return state
+        
+        # Try Canadian provinces
+        canadian_provinces = {
+            'AB': 'Alberta', 'BC': 'British Columbia', 'MB': 'Manitoba',
+            'NB': 'New Brunswick', 'NL': 'Newfoundland and Labrador',
+            'NS': 'Nova Scotia', 'NT': 'Northwest Territories',
+            'NU': 'Nunavut', 'ON': 'Ontario', 'PE': 'Prince Edward Island',
+            'QC': 'Quebec', 'SK': 'Saskatchewan', 'YT': 'Yukon'
+        }
+        
+        if state in canadian_provinces:
+            return state
+        
+        return ''
+
+    def extract_city_state(self, donor_name):
+        """Extract and normalize city and state from donor name"""
+        # Common patterns in BIMI data
+        patterns = [
+            r'(.+?),\s*([A-Z]{2})\s*\d*$',  # "City, ST" or "City, ST 12345"
+            r'(.+?)\s+([A-Z]{2})\s*\d*$',   # "City ST" or "City ST 12345"
+            r'(.+?)\s+([A-Z]{2}),?$',       # "City ST," or "City ST"
+        ]
+        
+        original_name = donor_name
+        city = ''
+        state = ''
+        
+        for pattern in patterns:
+            match = re.search(pattern, donor_name, re.IGNORECASE)
+            if match:
+                potential_city = match.group(1).strip()
+                potential_state = match.group(2).strip().upper()
+                
+                # Validate state
+                normalized_state = self.normalize_state_name(potential_state)
+                if normalized_state:
+                    city = self.normalize_city_name(potential_city)
+                    state = normalized_state
+                    
+                    # Clean the donor name by removing the city/state part
+                    name_pattern = r'^(.*?)\s*' + re.escape(match.group(0)) + r'$'
+                    name_match = re.match(name_pattern, original_name, re.IGNORECASE)
+                    if name_match:
+                        donor_name = name_match.group(1).strip()
+                    
+                    break
+        
+        return donor_name, city, state
+
     def parse_financial_data(self, text_data):
-        """Parse financial data with donor information"""
+        """Parse financial data with city/state extraction"""
         if not text_data or "Missionary Login" in text_data:
             return None
             
@@ -99,7 +243,6 @@ class BIMIFetcher:
         while i < len(lines):
             line = lines[i].rstrip()
             
-            # Section detection
             if "YOUR DONATIONS FOR THIS MONTH" in line:
                 in_donor_section = True
             elif "YOUR DEDUCTIONS" in line and in_donor_section:
@@ -113,29 +256,37 @@ class BIMIFetcher:
                 if cash_match:
                     financial_totals['net_available_cash'] = float(cash_match.group(1).replace(',', ''))
             
-            # Donor parsing
             if in_donor_section and line.strip():
                 donor_match = re.match(r'^\s*(\d+)\s+(.*?)\s+\$([\d,]+\.\d+)$', line)
                 if donor_match:
                     donor_num = donor_match.group(1).strip()
-                    donor_name = donor_match.group(2).strip()
+                    original_name = donor_match.group(2).strip()
                     amount = float(donor_match.group(3).replace(',', ''))
                     
-                    # Simple name cleaning
-                    clean_name = re.sub(r'\s+P\s*O\s*BOX\s+\d+.*', '', donor_name, flags=re.IGNORECASE)
+                    # Extract and normalize city/state
+                    cleaned_name, city, state = self.extract_city_state(original_name)
+                    
+                    # Additional cleaning for donor name
+                    clean_name = re.sub(r'\s+P\s*O\s*BOX\s+\d+.*', '', cleaned_name, flags=re.IGNORECASE)
+                    clean_name = re.sub(r'\s+\d+.*?(?:AVE|ST|RD|BLVD|DR|LN|CT|WAY|PL|TERR).*', '', clean_name, flags=re.IGNORECASE)
                     clean_name = ' '.join(clean_name.split())
                     
                     donors.append({
                         'donor_number': donor_num,
                         'name': clean_name,
+                        'original_name': original_name,
                         'amount': amount,
-                        'city': '',
-                        'state': ''
+                        'city': city,
+                        'state': state,
+                        'location': f"{city}, {state}" if city and state else ""
                     })
+                    
+                    if city and state:
+                        print(f"   📍 Found: {clean_name} -> {city}, {state}")
             
             i += 1
         
-        print(f"   ✅ Parsed {len(donors)} donors")
+        print(f"   ✅ Found {len(donors)} donors")
         return donors, financial_totals
 
     def fetch_monthly_data(self, year, month, credentials):
@@ -155,118 +306,6 @@ class BIMIFetcher:
             'net_cash': financial_totals.get('net_available_cash', 0),
             'donors': donors
         }
-
-    def analyze_giving_pattern(self, donor_id, donor_history):
-        """Analyze donor's giving pattern"""
-        if donor_id not in donor_history or len(donor_history[donor_id]) < 2:
-            return "One-Time", "Low", 0
-        
-        gifts = donor_history[donor_id]
-        gifts.sort(key=lambda x: x['date'])
-        
-        # Calculate intervals between gifts
-        intervals = []
-        for i in range(1, len(gifts)):
-            current_date = datetime.strptime(gifts[i]['date'], '%Y-%m')
-            previous_date = datetime.strptime(gifts[i-1]['date'], '%Y-%m')
-            months_diff = (current_date.year - previous_date.year) * 12 + (current_date.month - previous_date.month)
-            intervals.append(months_diff)
-        
-        # Calculate typical amount (mode)
-        amounts = [g['amount'] for g in gifts]
-        amount_counter = Counter(amounts)
-        typical_amount = amount_counter.most_common(1)[0][0] if amount_counter else sum(amounts) / len(amounts)
-        
-        if not intervals:
-            return "One-Time", "Low", typical_amount
-        
-        # Determine frequency pattern
-        interval_counter = Counter(intervals)
-        most_common_interval, count = interval_counter.most_common(1)[0]
-        consistency = count / len(intervals)
-        
-        # Map to frequency names
-        frequency_map = {
-            1: "Monthly",
-            2: "Bi-Monthly", 
-            3: "Quarterly",
-            6: "Semi-Annual",
-            12: "Annual"
-        }
-        
-        frequency = frequency_map.get(most_common_interval, f"Every {most_common_interval} Months")
-        
-        # Determine confidence
-        if consistency >= 0.8 and len(gifts) >= 4:
-            confidence = "High"
-        elif consistency >= 0.6 and len(gifts) >= 3:
-            confidence = "Medium"
-        else:
-            confidence = "Low"
-            frequency = "Variable"
-        
-        return frequency, confidence, typical_amount
-
-    def classify_donors_smart(self, current_month_donors, donor_history):
-        """Smart donor classification with 12-month history"""
-        new_donors = []
-        changed_donors = []
-        normal_donors = []
-        missed_donors = []
-        
-        current_month_dict = {d['donor_number']: d for d in current_month_donors}
-        
-        print(f"🔍 Analyzing {len(donor_history)} historical donors...")
-        
-        # Analyze each donor in history
-        for donor_id, history in donor_history.items():
-            frequency, confidence, typical_amount = self.analyze_giving_pattern(donor_id, donor_history)
-            
-            if donor_id in current_month_dict:
-                current_gift = current_month_dict[donor_id]['amount']
-                change = current_gift - typical_amount
-                change_percent = (change / typical_amount * 100) if typical_amount > 0 else 0
-                
-                donor_data = {
-                    **current_month_dict[donor_id],
-                    'frequency': frequency,
-                    'confidence': confidence,
-                    'typical_amount': typical_amount,
-                    'change_amount': change,
-                    'change_percent': change_percent
-                }
-                
-                # Classification logic
-                if len(history) == 1:  # Only one previous gift
-                    new_donors.append(donor_data)
-                elif abs(change_percent) > 50:  # Major changes
-                    changed_donors.append(donor_data)
-                else:
-                    normal_donors.append(donor_data)
-            else:
-                # Donor didn't give this month
-                if frequency != "One-Time" and confidence in ["High", "Medium"]:
-                    missed_donors.append({
-                        'donor_number': donor_id,
-                        'name': history[0]['name'],
-                        'frequency': frequency,
-                        'confidence': confidence,
-                        'typical_amount': typical_amount
-                    })
-        
-        # Add truly new donors (not in history at all)
-        for donor in current_month_donors:
-            if donor['donor_number'] not in donor_history:
-                new_donors.append({
-                    **donor,
-                    'frequency': 'One-Time',
-                    'confidence': 'Low',
-                    'typical_amount': donor['amount'],
-                    'change_amount': 0,
-                    'change_percent': 0
-                })
-        
-        return new_donors, changed_donors, missed_donors, normal_donors
 
 def generate_session_id(credentials):
     """Generate a unique session ID"""
@@ -297,16 +336,14 @@ def login():
     if fetcher.login_to_bimi(credentials):
         print("✅ Login successful!")
         
-        # Generate session ID
         session_id = generate_session_id(credentials)
         session['session_id'] = session_id
         
-        # Store session data
         data_store[session_id] = {
             'credentials': credentials,
             'login_time': datetime.now().isoformat(),
             'data_loaded': False,
-            'months_of_history': MONTHS_OF_HISTORY  # Store the config
+            'months_of_history': MONTHS_OF_HISTORY
         }
         
         return redirect(url_for('loading'))
@@ -338,7 +375,6 @@ def load_initial_data():
     print("🚀 Loading current month data...")
     
     try:
-        # Get current month only (fast)
         current_date = datetime.now()
         report_month = current_date.replace(day=1) - timedelta(days=1)
         
@@ -351,7 +387,10 @@ def load_initial_data():
         if not current_data:
             return jsonify({'status': 'error', 'message': 'Failed to fetch current data'})
         
-        # Store current data
+        # Count donors with locations
+        donors_with_locations = sum(1 for donor in current_data.get('donors', []) if donor.get('city') and donor.get('state'))
+        print(f"📍 Found {donors_with_locations} donors with city/state information")
+        
         data_store[session_id].update({
             'current_data': current_data,
             'data_loaded': True,
@@ -364,7 +403,8 @@ def load_initial_data():
         return jsonify({
             'status': 'complete',
             'donors_loaded': len(current_data.get('donors', [])),
-            'gross_amount': current_data.get('gross_donations', 0)
+            'gross_amount': current_data.get('gross_donations', 0),
+            'donors_with_locations': donors_with_locations
         })
         
     except Exception as e:
@@ -373,7 +413,7 @@ def load_initial_data():
 
 @app.route('/dashboard')
 def dashboard():
-    """Dashboard with full 12-month analytics"""
+    """Dashboard with current month + optional history"""
     session_id = session.get('session_id')
     
     if not session_id or session_id not in data_store:
@@ -381,120 +421,59 @@ def dashboard():
     
     session_data = data_store[session_id]
     
-    # Redirect to loading if no data
     if not session_data.get('data_loaded'):
         return redirect(url_for('loading'))
     
-    print("✅ Showing dashboard with analytics")
+    print("✅ Showing dashboard")
     
-    # Get current data
     current_data = session_data.get('current_data', {})
     current_donors = current_data.get('donors', [])
-    
-    # Get report period
     report_display = session_data.get('report_month', 'Current Month')
-    months_count = session_data.get('months_of_history', MONTHS_OF_HISTORY)
     
-    # Check if we have full history
-    has_full_history = session_data.get('full_history_loaded', False)
+    # Simple donor classification
     donor_history = session_data.get('donor_history', {})
+    new_donors = []
+    existing_donors = []
     
-    # Build monthly data for display
-    months_data = []
-    current_date = datetime.now()
-    
-    if has_full_history:
-        # Full analytics with smart classification
-        fetcher = BIMIFetcher()
-        new_donors, changed_donors, missed_donors, normal_donors = fetcher.classify_donors_smart(current_donors, donor_history)
-        
-        # Build complete monthly history for charts
-        for i in range(months_count):
-            month_date = current_date.replace(day=1)
-            for _ in range(i):
-                if month_date.month == 1:
-                    month_date = month_date.replace(year=month_date.year-1, month=12)
-                else:
-                    month_date = month_date.replace(month=month_date.month-1)
-            
-            year_val = month_date.year
-            month_val = month_date.month
-            month_key = f"{year_val}-{month_val:02d}"
-            
-            month_gross = 0
-            month_donors = []
-            
-            for donor_id, history in donor_history.items():
-                for gift in history:
-                    if gift['date'] == month_key:
-                        month_gross += gift['amount']
-                        month_donors.append(gift)
-            
-            if month_gross > 0 or i == 0:  # Always include current month
-                months_data.append({
-                    'month': f"{month_date.strftime('%B %Y')}",
-                    'gross_donations': month_gross,
-                    'net_cash': month_gross,
-                    'donor_count': len(month_donors)
-                })
-        
-        # Calculate 12-month average
-        if months_data:
-            amounts = [m['gross_donations'] for m in months_data]
-            if len(amounts) >= 3:
-                sorted_amounts = sorted(amounts)
-                trimmed_amounts = sorted_amounts[1:-1]  # Remove outliers
-                avg_gross = sum(trimmed_amounts) / len(trimmed_amounts)
-            else:
-                avg_gross = sum(amounts) / len(amounts)
-            
-            # Calculate differences from average
-            for month_data in months_data:
-                dollar_diff = month_data['gross_donations'] - avg_gross
-                percent_diff = (dollar_diff / avg_gross) * 100 if avg_gross > 0 else 0
-                month_data['dollar_diff'] = dollar_diff
-                month_data['percent_diff'] = percent_diff
-            
-            current_month_data = months_data[0]
+    for donor in current_donors:
+        if donor['donor_number'] in donor_history:
+            existing_donors.append(donor)
         else:
-            avg_gross = 0
-            current_month_data = {
-                'month': report_display,
-                'gross_donations': current_data.get('gross_donations', 0),
-                'net_cash': current_data.get('net_cash', 0)
-            }
-    else:
-        # Just show current month (fast mode)
-        new_donors = current_donors
-        changed_donors = []
-        missed_donors = []
-        normal_donors = []
-        months_data = [{
-            'month': report_display,
-            'gross_donations': current_data.get('gross_donations', 0),
-            'net_cash': current_data.get('net_cash', 0)
-        }]
-        avg_gross = current_data.get('gross_donations', 0)
-        current_month_data = months_data[0]
+            new_donors.append(donor)
+    
+    # Build location summary
+    location_summary = {}
+    for donor in current_donors:
+        if donor.get('city') and donor.get('state'):
+            location_key = f"{donor['city']}, {donor['state']}"
+            if location_key not in location_summary:
+                location_summary[location_key] = {
+                    'count': 0,
+                    'total_amount': 0,
+                    'city': donor['city'],
+                    'state': donor['state']
+                }
+            location_summary[location_key]['count'] += 1
+            location_summary[location_key]['total_amount'] += donor['amount']
+    
+    # Sort locations by donor count
+    sorted_locations = sorted(location_summary.items(), key=lambda x: x[1]['count'], reverse=True)
     
     return render_template('dashboard.html', 
-                         months_data=months_data,
-                         average_gross=avg_gross,
-                         current_month=current_month_data,
+                         current_data=current_data,
                          new_donors=new_donors,
-                         changed_donors=changed_donors,
-                         missed_donors=missed_donors,
-                         normal_donors=normal_donors,
+                         existing_donors=existing_donors,
                          total_donors=len(current_donors),
                          report_display=report_display,
-                         has_full_history=has_full_history,
-                         months_count=months_count,
                          gross_donations=current_data.get('gross_donations', 0),
-                         net_cash=current_data.get('net_cash', 0))
+                         net_cash=current_data.get('net_cash', 0),
+                         location_summary=sorted_locations,
+                         months_count=MONTHS_OF_HISTORY,
+                         has_full_history=session_data.get('full_history_loaded', False))
 
 @app.route('/load-full-history')
 def load_full_history():
-    """Background task to load full MONTHS_OF_HISTORY months"""
+    """Background task to load 6 months of history"""
     session_id = session.get('session_id')
     if not session_id or session_id not in data_store:
         return jsonify({'status': 'error', 'message': 'Not authenticated'})
@@ -510,14 +489,25 @@ def load_full_history():
         donor_history = {}
         loaded_months = 0
         
-        # Load specified number of months
-        for i in range(months_count):
+        # Re-login to ensure fresh session
+        fetcher.login_to_bimi(credentials)
+        
+        start_time = time.time()
+        
+        for i in range(min(months_count, 6)):
+            # Check timeout (30 seconds max)
+            if time.time() - start_time > 30:
+                print("⏰ Timeout reached, stopping history load")
+                break
+            
             month_date = current_date.replace(day=1)
             for _ in range(i):
                 if month_date.month == 1:
                     month_date = month_date.replace(year=month_date.year-1, month=12)
                 else:
                     month_date = month_date.replace(month=month_date.month-1)
+            
+            print(f"  Loading month {i+1}/{min(months_count, 6)}: {month_date.strftime('%B %Y')}")
             
             month_data = fetcher.fetch_monthly_data(
                 month_date.year, 
@@ -533,7 +523,6 @@ def load_full_history():
                         donor_history[donor_id] = []
                     
                     month_key = f"{month_date.year}-{month_date.month:02d}"
-                    # Avoid duplicates
                     existing_dates = [g['date'] for g in donor_history[donor_id]]
                     if month_key not in existing_dates:
                         donor_history[donor_id].append({
@@ -544,21 +533,31 @@ def load_full_history():
                             'state': donor.get('state', '')
                         })
             
-            # Small delay to be respectful
-            time.sleep(0.8)
+            time.sleep(1)  # Short delay
         
-        # Update with full history
-        data_store[session_id]['donor_history'] = donor_history
-        data_store[session_id]['full_history_loaded'] = True
-        data_store[session_id]['history_loaded_at'] = datetime.now().isoformat()
-        
-        print(f"✅ Full {months_count}-month history loaded: {len(donor_history)} donors across {loaded_months} months")
-        return jsonify({
-            'status': 'complete', 
-            'donors_loaded': len(donor_history),
-            'months_loaded': loaded_months,
-            'total_months': months_count
-        })
+        if donor_history:
+            existing_history = data_store[session_id].get('donor_history', {})
+            for donor_id, history in donor_history.items():
+                if donor_id in existing_history:
+                    existing_dates = [g['date'] for g in existing_history[donor_id]]
+                    for gift in history:
+                        if gift['date'] not in existing_dates:
+                            existing_history[donor_id].append(gift)
+                else:
+                    existing_history[donor_id] = history
+            
+            data_store[session_id]['donor_history'] = existing_history
+            data_store[session_id]['full_history_loaded'] = True
+            data_store[session_id]['months_actually_loaded'] = loaded_months
+            
+            print(f"✅ History loaded: {len(existing_history)} donors across {loaded_months} months")
+            return jsonify({
+                'status': 'complete', 
+                'donors_loaded': len(existing_history),
+                'months_loaded': loaded_months
+            })
+        else:
+            return jsonify({'status': 'error', 'message': 'No history data could be loaded'})
         
     except Exception as e:
         print(f"❌ Error loading full history: {e}")
@@ -574,11 +573,11 @@ def debug():
     session_data = data_store.get(session_id, {}) if session_id else {}
     return jsonify({
         'session_id': session_id,
-        'data_store_keys': list(data_store.keys()),
         'months_config': MONTHS_OF_HISTORY,
-        'session_months': session_data.get('months_of_history'),
+        'has_data': session_data.get('data_loaded', False),
         'has_full_history': session_data.get('full_history_loaded', False),
-        'donor_history_count': len(session_data.get('donor_history', {}))
+        'current_donors': len(session_data.get('current_data', {}).get('donors', [])),
+        'history_donors': len(session_data.get('donor_history', {}))
     })
 
 @app.route('/logout')
