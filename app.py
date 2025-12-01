@@ -34,19 +34,25 @@ class BIMIFetcher:
         login_url = "https://missionary.bimi.org/home.php"
         print("🔐 Logging into BIMI...")
         
-        response = self.session.post(
-            login_url, 
-            data=credentials,
-            headers=self.headers,
-            allow_redirects=True
-        )
-        
-        if response.status_code == 200 and "Missionary Login" not in response.text:
-            print("✅ Login successful!")
-            self.is_logged_in = True
-            return True
-        else:
-            print("❌ Login failed")
+        try:
+            response = self.session.post(
+                login_url, 
+                data=credentials,
+                headers=self.headers,
+                allow_redirects=True,
+                timeout=30
+            )
+            
+            if response.status_code == 200 and "Missionary Login" not in response.text:
+                print("✅ Login successful!")
+                self.is_logged_in = True
+                return True
+            else:
+                print("❌ Login failed - wrong credentials or server error")
+                self.is_logged_in = False
+                return False
+        except Exception as e:
+            print(f"❌ Login error: {e}")
             self.is_logged_in = False
             return False
     
@@ -70,6 +76,10 @@ class BIMIFetcher:
             response = self.session.get(text_url, params=params, headers=self.headers, timeout=30)
             
             if response.status_code == 200:
+                if "Missionary Login" in response.text:
+                    print("   ❌ Got login page, session expired")
+                    self.is_logged_in = False
+                    return None
                 return response.text
             else:
                 print(f"❌ Failed to fetch data for {month}/{year}: {response.status_code}")
@@ -140,7 +150,7 @@ class BIMIFetcher:
 
     def parse_financial_data_multiline(self, text_data):
         """Multi-line parser that handles donor numbers, names, amounts, and addresses"""
-        if "Missionary Login" in text_data:
+        if not text_data or "Missionary Login" in text_data:
             print("   ❌ Received login page instead of financial data")
             return None
             
@@ -402,19 +412,25 @@ def login():
         data_store[session_id] = {
             'data_loaded': False,
             'donor_history': {},
-            'credentials': credentials
+            'credentials': credentials,
+            'created_at': datetime.now().isoformat()
         }
         
+        print(f"📝 Session created: {session_id}")
         return redirect(url_for('dashboard'))
     else:
         print("❌ Login failed")
-        return "Login failed - check your credentials", 401
+        return render_template('login.html', error="Login failed - check your credentials")
 
 @app.route('/load-data')
 def load_data():
     """Background endpoint to load all historical data"""
     session_id = session.get('session_id')
+    print(f"🔍 Load-data called, session_id: {session_id}")
+    print(f"🔍 Data store keys: {list(data_store.keys())}")
+    
     if not session_id or session_id not in data_store:
+        print("❌ No valid session found")
         return jsonify({'status': 'error', 'message': 'Not authenticated'})
     
     credentials = data_store[session_id]['credentials']
@@ -467,7 +483,8 @@ def load_data():
         # Update data store
         data_store[session_id].update({
             'donor_history': donor_history,
-            'data_loaded': True
+            'data_loaded': True,
+            'loaded_at': datetime.now().isoformat()
         })
         
         print(f"✅ Data loading complete! Loaded {len(donor_history)} unique donors across {successful_months} months")
@@ -488,6 +505,9 @@ def load_data():
 @app.route('/dashboard')
 def dashboard():
     session_id = session.get('session_id')
+    
+    print(f"🔍 Dashboard accessed, session_id: {session_id}")
+    print(f"🔍 Data store: {list(data_store.keys())}")
     
     if not session_id or session_id not in data_store:
         print("❌ No valid session, redirecting to login")
@@ -522,7 +542,7 @@ def dashboard():
     current_data = fetcher.fetch_monthly_data(year, month, credentials)
     
     if not current_data:
-        return "Failed to fetch current month data", 500
+        return render_template('error.html', message="Failed to fetch current month data. Please try logging in again.")
     
     current_donors = current_data.get('donors', [])
     donor_history = session_data.get('donor_history', {})
@@ -605,11 +625,16 @@ def debug_session():
     return jsonify({
         'session_id': session_id,
         'session_keys': list(session.keys()),
-        'data_store_keys': list(data_store.keys()) if session_id else [],
+        'data_store_keys': list(data_store.keys()),
         'data_loaded': data_store.get(session_id, {}).get('data_loaded') if session_id else None,
         'has_credentials': 'bimi_credentials' in session,
         'donor_history_count': len(data_store.get(session_id, {}).get('donor_history', {})) if session_id else 0
     })
+
+@app.route('/status')
+def status():
+    """Simple status check"""
+    return jsonify({'status': 'ok', 'timestamp': datetime.now().isoformat()})
 
 @app.route('/logout')
 def logout():
@@ -617,8 +642,18 @@ def logout():
     session_id = session.get('session_id')
     if session_id and session_id in data_store:
         del data_store[session_id]
+        print(f"🗑️ Cleared session: {session_id}")
     session.clear()
     return redirect(url_for('login_page'))
+
+# Error handlers
+@app.errorhandler(404)
+def not_found(error):
+    return render_template('error.html', message="Page not found"), 404
+
+@app.errorhandler(500)
+def internal_error(error):
+    return render_template('error.html', message="Internal server error"), 500
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
