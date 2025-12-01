@@ -5,7 +5,6 @@ import re
 import os
 import json
 from collections import Counter
-import threading
 
 app = Flask(__name__)
 app.secret_key = os.environ.get('SECRET_KEY', 'dev-key-change-in-production')
@@ -338,7 +337,7 @@ class BIMIFetcher:
         
         print(f"🔍 CLASSIFICATION DEBUG:")
         print(f"   Donor history entries: {len(donor_history)}")
-        print(f"   Current month donors: {len(current_donors)}")
+        print(f"   Current month donors: {len(current_month_donors)}")
         print(f"   Donors in both: {len(set(current_month_dict.keys()) & set(donor_history.keys()))}")
         
         # Analyze each donor in history
@@ -489,22 +488,23 @@ def dashboard():
                 'net_cash': month_data['net_cash']
             })
     
-    # Calculate 6-month average and enhancements
-# Calculate robust 6-month average (remove highest and lowest)
-if months_data:
-    # Extract just the donation amounts
-    amounts = [m['gross_donations'] for m in months_data]
-    
-    if len(amounts) >= 3:
-        # Sort and remove highest and lowest (trimmed mean)
-        sorted_amounts = sorted(amounts)
-        trimmed_amounts = sorted_amounts[1:-1]  # Remove first (lowest) and last (highest)
-        avg_gross = sum(trimmed_amounts) / len(trimmed_amounts)
-        print(f"📊 Robust average: ${avg_gross:,.2f} (removed high: ${sorted_amounts[-1]:,.2f}, low: ${sorted_amounts[0]:,.2f})")
-    else:
-        # Fallback to regular average if not enough data
-        avg_gross = sum(amounts) / len(amounts)
-        print(f"📊 Regular average: ${avg_gross:,.2f} (not enough data for robust average)")
+    # Calculate robust 6-month average (remove highest and lowest)
+    if months_data:
+        # Extract just the donation amounts
+        amounts = [m['gross_donations'] for m in months_data]
+        
+        if len(amounts) >= 3:
+            # Sort and remove highest and lowest (trimmed mean)
+            sorted_amounts = sorted(amounts)
+            trimmed_amounts = sorted_amounts[1:-1]  # Remove first (lowest) and last (highest)
+            avg_gross = sum(trimmed_amounts) / len(trimmed_amounts)
+            print(f"📊 Robust average: ${avg_gross:,.2f} (removed high: ${sorted_amounts[-1]:,.2f}, low: ${sorted_amounts[0]:,.2f})")
+        else:
+            # Fallback to regular average if not enough data
+            avg_gross = sum(amounts) / len(amounts)
+            print(f"📊 Regular average: ${avg_gross:,.2f} (not enough data for robust average)")
+        
+        # Calculate differences for display
         for month_data in months_data:
             dollar_diff = month_data['gross_donations'] - avg_gross
             percent_diff = (dollar_diff / avg_gross) * 100
@@ -547,4 +547,3 @@ def logout():
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port)
-
