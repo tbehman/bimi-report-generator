@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>BIMI Dashboard - Financial Overview</title>
+    <title>BIMI Dashboard - 12-Month Financial Overview</title>
     <style>
         * {
             margin: 0;
@@ -64,6 +64,45 @@
         
         .logout-btn:hover {
             background: rgba(255, 255, 255, 0.3);
+        }
+        
+        .progress-section {
+            background: #fff3cd;
+            border: 1px solid #ffeaa7;
+            border-radius: 10px;
+            padding: 20px;
+            margin-bottom: 30px;
+            text-align: center;
+        }
+        
+        .progress-section h3 {
+            color: #856404;
+            margin-bottom: 15px;
+        }
+        
+        .progress-bar {
+            background: #e9ecef;
+            border-radius: 10px;
+            height: 20px;
+            margin: 15px 0;
+            overflow: hidden;
+        }
+        
+        .progress-fill {
+            background: linear-gradient(135deg, #28a745 0%, #20c997 100%);
+            height: 100%;
+            color: white;
+            font-size: 12px;
+            font-weight: 600;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: width 0.5s ease;
+        }
+        
+        .progress-section p {
+            color: #856404;
+            font-size: 14px;
         }
         
         .summary-cards {
@@ -183,11 +222,6 @@
             font-style: italic;
         }
         
-        .donor-details {
-            font-size: 12px;
-            color: #7f8c8d;
-        }
-        
         .pattern {
             font-size: 12px;
             color: #7f8c8d;
@@ -225,9 +259,27 @@
         <div class="header">
             <a href="/logout" class="logout-btn">Log Out</a>
             <h1>Missionary Financial Dashboard</h1>
-            <div class="report-period">📋 FINANCIAL REPORT: {{ report_display }}</div>
+            <div class="report-period">📋 12-MONTH FINANCIAL REPORT: {{ report_display }}</div>
             <div class="generated-date">Generated on {{ current_date.strftime('%B %d, %Y') }}</div>
         </div>
+        
+        {% if not history_complete %}
+        <div class="progress-section">
+            <h3>🕐 Building 12-Month Donor History</h3>
+            <div class="progress-bar">
+                <div class="progress-fill" style="width: {{ (months_collected / total_months * 100) | round }}%">
+                    {{ months_collected }}/{{ total_months }} months collected
+                </div>
+            </div>
+            <p>Donor patterns will become more accurate as we collect more historical data.</p>
+            <p><small>Refresh the page to continue collecting data...</small></p>
+        </div>
+        {% else %}
+        <div class="progress-section" style="background: #d4edda; border-color: #c3e6cb;">
+            <h3>✅ 12-Month History Complete!</h3>
+            <p>Full donor pattern analysis is now available with 12 months of historical data.</p>
+        </div>
+        {% endif %}
         
         <!-- Summary Cards -->
         <div class="summary-cards">
@@ -265,7 +317,7 @@
                         <th>Month</th>
                         <th>Gross Donations</th>
                         <th>Net Cash</th>
-                        <th>vs Average</th>
+                        <th>vs 12-Month Average</th>
                     </tr>
                 </thead>
                 <tbody>
