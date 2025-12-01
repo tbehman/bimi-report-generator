@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Loading - BIMI Analytics</title>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            font-family: Arial, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            text-align: center;
+        }
+        .container {
+            max-width: 500px;
+            padding: 40px;
+        }
+        .spinner {
+            border: 4px solid rgba(255,255,255,0.3);
+            border-radius: 50%;
+            border-top: 4px solid white;
+            width: 40px;
+            height: 40px;
+            animation: spin 1s linear infinite;
+            margin: 20px auto;
+        }
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        .error {
+            background: rgba(255,0,0,0.1);
+            padding: 15px;
+            border-radius: 5px;
+            margin: 20px 0;
+        }
+        button {
+            background: white;
+            color: #667eea;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 5px;
+            cursor: pointer;
+            margin: 5px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>BIMI Analytics</h1>
+        <p>Loading your financial data...</p>
+        <div class="spinner"></div>
+        <p id="status">Connecting to BIMI...</p>
+        <div id="error" class="error" style="display: none;"></div>
+    </div>
+
+    <script>
+        async function loadData() {
+            try {
+                document.getElementById('status').textContent = 'Fetching current month data...';
+                
+                const response = await fetch('/load-initial-data');
+                const data = await response.json();
+                
+                if (data.status === 'complete') {
+                    document.getElementById('status').textContent = 'Complete! Redirecting...';
+                    setTimeout(() => {
+                        window.location.href = '/dashboard';
+                    }, 1000);
+                } else {
+                    throw new Error(data.message || 'Failed to load data');
+                }
+            } catch (error) {
+                document.getElementById('status').textContent = 'Error occurred';
+                document.getElementById('error').textContent = error.message;
+                document.getElementById('error').style.display = 'block';
+                
+                // Add retry button
+                const retryBtn = document.createElement('button');
+                retryBtn.textContent = 'Try Again';
+                retryBtn.onclick = () => window.location.reload();
+                document.querySelector('.container').appendChild(retryBtn);
+            }
+        }
+
+        // Start loading when page loads
+        window.addEventListener('load', loadData);
+    </script>
+</body>
+</html>
