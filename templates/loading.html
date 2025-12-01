@@ -130,43 +130,46 @@
 
     <script>
         let startTime = Date.now();
-        let estimatedTotalTime = 60000; // 60 seconds estimate
-        
-        // Update progress bar based on elapsed time
+        let estimatedTotalTime = 90000; // 90 seconds estimate (more realistic)
+        let retryCount = 0;
+        const maxRetries = 2;
+
         function updateProgress() {
             const elapsed = Date.now() - startTime;
             const progress = Math.min((elapsed / estimatedTotalTime) * 100, 95);
             
             document.getElementById('progressFill').style.width = progress + '%';
             
-            if (progress < 25) {
-                document.getElementById('progressText').textContent = 'Loading current month data...';
-                document.getElementById('currentAction').textContent = '📊 Retrieving current financial statement';
-            } else if (progress < 50) {
-                document.getElementById('progressText').textContent = 'Loading recent history...';
-                document.getElementById('currentAction').textContent = '📅 Gathering last 6 months of donor data';
-            } else if (progress < 75) {
-                document.getElementById('progressText').textContent = 'Loading full history...';
-                document.getElementById('currentAction').textContent = '📈 Collecting complete 12-month history';
-            } else {
-                document.getElementById('progressText').textContent = 'Finalizing analysis...';
-                document.getElementById('currentAction').textContent = '🔍 Analyzing donor patterns and trends';
-            }
+            // Update status messages based on progress
+            const statusMessages = [
+                { threshold: 25, text: 'Loading current month data...', action: '📊 Retrieving current financial statement' },
+                { threshold: 50, text: 'Loading recent history...', action: '📅 Gathering last 6 months of donor data' },
+                { threshold: 75, text: 'Loading full history...', action: '📈 Collecting complete 12-month history' },
+                { threshold: 100, text: 'Finalizing analysis...', action: '🔍 Analyzing donor patterns and trends' }
+            ];
+            
+            const currentStatus = statusMessages.find(status => progress < status.threshold) || statusMessages[3];
+            document.getElementById('progressText').textContent = currentStatus.text;
+            document.getElementById('currentAction').textContent = currentStatus.action;
             
             // Show time elapsed
             const secondsElapsed = Math.floor(elapsed / 1000);
-            if (secondsElapsed > 10) {
-                document.getElementById('statusMessage').innerHTML = 
-                    `Gathering 12 months of financial history from BIMI.<br>
-                     <small>Elapsed time: ${secondsElapsed} seconds</small>`;
-            }
+            document.getElementById('statusMessage').innerHTML = 
+                `Gathering 12 months of financial history from BIMI.<br>
+                 <small>Elapsed time: ${secondsElapsed} seconds</small>`;
         }
-        
-        // Start the actual data loading
+
         async function loadData() {
             try {
+                console.log('Starting data load...');
                 const response = await fetch('/load-data');
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                }
+                
                 const data = await response.json();
+                console.log('Load data response:', data);
                 
                 if (data.status === 'complete') {
                     // Complete - redirect to dashboard
@@ -174,24 +177,43 @@
                     document.getElementById('progressText').textContent = 'Complete! Redirecting...';
                     document.getElementById('currentAction').textContent = '✅ Data loaded successfully';
                     
+                    // Force a hard redirect to ensure fresh session
                     setTimeout(() => {
-                        window.location.href = '/dashboard';
+                        window.location.href = '/dashboard?t=' + Date.now();
                     }, 1000);
+                } else if (data.status === 'error') {
+                    throw new Error(data.message);
+                } else {
+                    throw new Error('Unknown response from server');
                 }
             } catch (error) {
                 console.error('Loading error:', error);
-                document.getElementById('progressText').textContent = 'Error loading data';
-                document.getElementById('currentAction').textContent = '❌ Failed to load data. Please refresh the page.';
-                document.getElementById('progressFill').style.backgroundColor = '#ff6b6b';
+                
+                if (retryCount < maxRetries) {
+                    retryCount++;
+                    document.getElementById('progressText').textContent = `Retrying... (${retryCount}/${maxRetries})`;
+                    document.getElementById('currentAction').textContent = '🔄 Connection issue, retrying...';
+                    
+                    setTimeout(loadData, 3000);
+                } else {
+                    document.getElementById('progressText').textContent = 'Error loading data';
+                    document.getElementById('currentAction').textContent = '❌ Failed to load data. Please try refreshing.';
+                    document.getElementById('progressFill').style.backgroundColor = '#ff6b6b';
+                    document.getElementById('statusMessage').innerHTML = 
+                        `Error: ${error.message}<br>
+                         <button onclick="window.location.href='/dashboard'" style="margin-top: 10px; padding: 8px 16px; background: white; color: #667eea; border: none; border-radius: 4px; cursor: pointer;">
+                             Try Dashboard Anyway
+                         </button>`;
+                }
             }
         }
-        
+
         // Start everything when page loads
         document.addEventListener('DOMContentLoaded', function() {
             // Start progress updates
-            setInterval(updateProgress, 500);
+            const progressInterval = setInterval(updateProgress, 500);
             
-            // Start data loading after a brief delay
+            // Start data loading
             setTimeout(loadData, 1000);
         });
     </script>
