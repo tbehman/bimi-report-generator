@@ -394,14 +394,95 @@ def login():
         print("❌ Login failed")
         return "Login failed - check your credentials", 401
 
+@app.route('/load-data')
+def load_data():
+    """Background endpoint to load all historical data"""
+    if 'bimi_credentials' not in session:
+        return jsonify({'status': 'error', 'message': 'Not authenticated'})
+    
+    credentials = session['bimi_credentials']
+    fetcher = BIMIFetcher()
+    
+    print("🚀 Starting complete data load...")
+    
+    try:
+        current_date = datetime.now()
+        donor_history = {}
+        total_months = 12
+        successful_months = 0
+
+        # Load current month + 11 previous months
+        for i in range(total_months):
+            month_date = current_date.replace(day=1)
+            for _ in range(i):
+                if month_date.month == 1:
+                    month_date = month_date.replace(year=month_date.year-1, month=12)
+                else:
+                    month_date = month_date.replace(month=month_date.month-1)
+            
+            year_val = month_date.year
+            month_val = month_date.month
+            
+            print(f"📅 Loading data {i+1}/{total_months}: {year_val}-{month_val:02d}")
+            month_data = fetcher.fetch_monthly_data(year_val, month_val, credentials)
+            
+            if month_data and month_data.get('donors'):
+                successful_months += 1
+                for donor in month_data['donors']:
+                    donor_id = donor['donor_number']
+                    if donor_id not in donor_history:
+                        donor_history[donor_id] = []
+                    
+                    month_key = f"{year_val}-{month_val:02d}"
+                    existing_dates = [g['date'] for g in donor_history[donor_id]]
+                    if month_key not in existing_dates:
+                        donor_history[donor_id].append({
+                            'date': month_key,
+                            'amount': donor['amount'],
+                            'name': donor['name'],
+                            'city': donor['city'],
+                            'state': donor['state']
+                        })
+            
+            # Small delay to be respectful to API
+            time.sleep(1.5)
+        
+        # CRITICAL FIX: Update session properly
+        session.update({
+            'donor_history': donor_history,
+            'data_loaded': True
+        })
+        
+        print(f"✅ Data loading complete! Loaded {len(donor_history)} unique donors across {successful_months} months")
+        
+        return jsonify({
+            'status': 'complete', 
+            'donors_loaded': len(donor_history),
+            'months_loaded': successful_months
+        })
+        
+    except Exception as e:
+        print(f"❌ Error in load_data: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({'status': 'error', 'message': str(e)})
+
 @app.route('/dashboard')
 def dashboard():
     if 'bimi_credentials' not in session:
+        print("❌ No credentials in session, redirecting to login")
         return redirect(url_for('login_page'))
+    
+    # Debug session state
+    print(f"🔍 Dashboard session check - data_loaded: {session.get('data_loaded')}")
+    print(f"🔍 Session keys: {list(session.keys())}")
     
     # Show loading screen if data isn't loaded yet
     if not session.get('data_loaded'):
+        print("🔄 Data not loaded yet, showing loading screen")
         return render_template('loading.html')
+    
+    print("✅ Data loaded, showing dashboard")
     
     # Data is loaded, show the actual dashboard
     credentials = session['bimi_credentials']
@@ -497,63 +578,14 @@ def dashboard():
                          report_display=report_display,
                          current_date=current_date)
 
-@app.route('/load-data')
-def load_data():
-    """Background endpoint to load all historical data"""
-    if 'bimi_credentials' not in session:
-        return jsonify({'status': 'error', 'message': 'Not authenticated'})
-    
-    credentials = session['bimi_credentials']
-    fetcher = BIMIFetcher()
-    
-    print("🚀 Starting complete data load...")
-    
-    current_date = datetime.now()
-    donor_history = {}
-    total_months = 12
-    
-    # Load current month + 11 previous months
-    for i in range(total_months):
-        month_date = current_date.replace(day=1)
-        for _ in range(i):
-            if month_date.month == 1:
-                month_date = month_date.replace(year=month_date.year-1, month=12)
-            else:
-                month_date = month_date.replace(month=month_date.month-1)
-        
-        year_val = month_date.year
-        month_val = month_date.month
-        
-        print(f"📅 Loading data {i+1}/{total_months}: {year_val}-{month_val:02d}")
-        month_data = fetcher.fetch_monthly_data(year_val, month_val, credentials)
-        
-        if month_data and month_data.get('donors'):
-            for donor in month_data['donors']:
-                donor_id = donor['donor_number']
-                if donor_id not in donor_history:
-                    donor_history[donor_id] = []
-                
-                month_key = f"{year_val}-{month_val:02d}"
-                existing_dates = [g['date'] for g in donor_history[donor_id]]
-                if month_key not in existing_dates:
-                    donor_history[donor_id].append({
-                        'date': month_key,
-                        'amount': donor['amount'],
-                        'name': donor['name'],
-                        'city': donor['city'],
-                        'state': donor['state']
-                    })
-        
-        # Small delay to be respectful to API (1-2 seconds between requests)
-        time.sleep(1.5)
-    
-    # Store complete data in session
-    session['donor_history'] = donor_history
-    session['data_loaded'] = True
-    
-    print(f"✅ Data loading complete! Loaded {len(donor_history)} unique donors across {total_months} months")
-    
-    return jsonify({'status': 'complete', 'donors_loaded': len(donor_history)})
+@app.route('/debug-session')
+def debug_session():
+    return jsonify({
+        'session_keys': list(session.keys()),
+        'data_loaded': session.get('data_loaded'),
+        'has_credentials': 'bimi_credentials' in session,
+        'donor_history_count': len(session.get('donor_history', {}))
+    })
 
 @app.route('/logout')
 def logout():
