@@ -1,18 +1,25 @@
-from flask import Flask, render_template, request, session, redirect, url_for
+from flask import Flask, render_template, request, session, redirect, url_for, jsonify, Response
 import requests
 from datetime import datetime, timedelta
 import re
 import os
 import json
 import time
+import threading
+from dateutil.relativedelta import relativedelta  # For safe month calculations
 
 app = Flask(__name__)
 app.secret_key = os.environ.get('SECRET_KEY', 'dev-key-123')
+
+# Simple in-memory storage
+fetchers = {}
+background_jobs = {}
 
 class WorkingBIMIFetcher:
     def __init__(self):
         self.session = requests.Session()
         self.setup_headers()
+        self.is_logged_in = False
         
     def setup_headers(self):
         self.headers = {
@@ -22,10 +29,11 @@ class WorkingBIMIFetcher:
             'Origin': 'https://missionary.bimi.org',
             'Referer': 'https://missionary.bimi.org/'
         }
+        self.session.headers.update(self.headers)
     
     def login(self, credentials):
         """EXACT same as working desktop version"""
-        print("🔐 Logging into BIMI...")
+        print(f"🔐 Logging into BIMI for {credentials['account_number']}...")
         
         response = self.session.post(
             'https://missionary.bimi.org/home.php',
@@ -35,14 +43,21 @@ class WorkingBIMIFetcher:
             timeout=30
         )
         
-        success = response.status_code == 200 and "Missionary Login" not in response.text
-        print(f"✅ Login {'successful' if success else 'failed'}")
-        print(f"   Response size: {len(response.text)} chars")
+        self.is_logged_in = (
+            response.status_code == 200 and 
+            "Missionary Login" not in response.text and
+            len(response.text) > 1000
+        )
         
-        return success
+        if self.is_logged_in:
+            print(f"✅ Login successful ({len(response.text)} chars)")
+        else:
+            print(f"❌ Login failed")
+        
+        return self.is_logged_in
     
     def fetch_month_data(self, year, month, credentials):
-        """EXACT same as working desktop version"""
+        """Fetch monthly data"""
         text_url = "https://missionary.bimi.org/common/Finances/ViewStatementText.php"
         params = {
             'MissionaryNumber': credentials['account_number'],
@@ -50,20 +65,15 @@ class WorkingBIMIFetcher:
             'StatementMonth': month
         }
         
-        print(f"📊 Fetching {month}/{year}...")
-        
         response = self.session.get(
             text_url,
             params=params,
-            headers=self.headers,
             timeout=30
         )
         
         if response.status_code == 200 and "Missionary Login" not in response.text:
-            print(f"✅ Fetched {len(response.text)} chars")
             return self.parse_simple(response.text)
         
-        print(f"❌ Fetch failed: {response.status_code}")
         return None
     
     def parse_simple(self, text_data):
@@ -111,11 +121,177 @@ class WorkingBIMIFetcher:
                         'amount': amount
                     })
         
-        print(f"✅ Parsed {len(donors)} donors")
         return donors, financial_totals
 
-# Simple in-memory storage (for session persistence)
-fetchers = {}
+# ============================================================================
+# PROVEN 12-MONTH FETCH STRATEGY (FIXED Date Calculation)
+# ============================================================================
+
+def fetch_12_months_proven(fetcher, credentials, job_id=None):
+    """
+    PROVEN STRATEGY: 1.5s delays, one retry on failure
+    FIXED: Date calculation bug using relativedelta
+    """
+    if job_id:
+        background_jobs[job_id] = {
+            'status': 'running',
+            'progress': 0,
+            'messages': [],
+            'results': [],
+            'started': datetime.now().isoformat()
+        }
+    
+    def update_job(message, progress=None):
+        if job_id and job_id in background_jobs:
+            if progress is not None:
+                background_jobs[job_id]['progress'] = progress
+            background_jobs[job_id]['messages'].append({
+                'time': datetime.now().strftime('%H:%M:%S'),
+                'message': message
+            })
+    
+    all_data = []
+    # Use 1st of previous month to avoid day-of-month issues
+    current_date = datetime.now().replace(day=1)
+    report_date = current_date - relativedelta(months=1)  # Previous month
+    
+    update_job("🚀 Starting 12-month fetch (Proven Strategy)", 0)
+    update_job("⚙️ Using 1.5s delays (tested & reliable)", 0)
+    update_job(f"📅 Report month: {report_date.strftime('%B %Y')}", 0)
+    
+    total_start = time.time()
+    
+    for month_num in range(12):
+        # FIXED: Safe month calculation using relativedelta
+        target_date = report_date - relativedelta(months=month_num)
+        year, month = target_date.year, target_date.month
+        
+        progress = int((month_num + 1) / 12 * 100)
+        
+        update_job(f"📅 [{month_num+1}/12] {target_date.strftime('%B %Y')}: Fetching...", progress)
+        
+        # Fetch with one retry if needed
+        fetch_start = time.time()
+        data = None
+        try:
+            data = fetcher.fetch_month_data(year, month, credentials)
+        except Exception as e:
+            update_job(f"  ❌ Exception: {str(e)}", progress)
+        
+        fetch_time = time.time() - fetch_start
+        
+        if data:
+            donors, totals = data
+            month_data = {
+                'month': target_date.strftime('%B %Y'),
+                'year': year,
+                'month_num': month,
+                'donors': donors,
+                'totals': totals,
+                'donor_count': len(donors),
+                'total_amount': totals.get('total_donations', 0),
+                'net_cash': totals.get('net_available_cash', 0),
+                'fetch_time': fetch_time
+            }
+            all_data.append(month_data)
+            
+            update_job(
+                f"  ✅ {len(donors)} donors, ${totals.get('total_donations', 0):.2f} ({fetch_time:.2f}s)",
+                progress
+            )
+            
+            # Store current month immediately for dashboard
+            if month_num == 0:  # Current report month
+                # Find session_id for this fetcher
+                for sid, session_data in fetchers.items():
+                    if session_data.get('fetcher') == fetcher:
+                        fetchers[sid]['current_data'] = {
+                            'donors': donors,
+                            'totals': totals,
+                            'report_month': target_date.strftime('%B %Y')
+                        }
+                        break
+        else:
+            # Try re-login and retry
+            update_job(f"  ⚠️ First attempt failed, re-authenticating...", progress)
+            fetcher.login(credentials)
+            time.sleep(1.0)
+            
+            # Retry
+            fetch_start = time.time()
+            try:
+                data = fetcher.fetch_month_data(year, month, credentials)
+            except Exception as e:
+                update_job(f"  ❌ Retry also failed: {str(e)}", progress)
+            
+            fetch_time = time.time() - fetch_start
+            
+            if data:
+                donors, totals = data
+                month_data = {
+                    'month': target_date.strftime('%B %Y'),
+                    'year': year,
+                    'month_num': month,
+                    'donors': donors,
+                    'totals': totals,
+                    'donor_count': len(donors),
+                    'total_amount': totals.get('total_donations', 0),
+                    'net_cash': totals.get('net_available_cash', 0),
+                    'fetch_time': fetch_time
+                }
+                all_data.append(month_data)
+                update_job(f"  ✅ Retry successful: {len(donors)} donors", progress)
+            else:
+                update_job(f"  ❌ Failed after retry, skipping month", progress)
+        
+        # PROVEN optimal delay: 1.5 seconds
+        if month_num < 11:
+            update_job(f"  ⏳ Waiting 1.5s...", progress)
+            time.sleep(1.5)
+    
+    # Complete
+    total_time = time.time() - total_start
+    
+    if all_data:
+        total_donors = sum(item['donor_count'] for item in all_data)
+        total_amount = sum(item['total_amount'] for item in all_data)
+        
+        update_job(f"\n🎯 FETCH COMPLETE: {len(all_data)}/12 months", 100)
+        update_job(f"📊 {total_donors} total donors", 100)
+        update_job(f"💰 ${total_amount:.2f} total donations", 100)
+        update_job(f"⏱️ {total_time:.1f} seconds total", 100)
+        
+        # Store full history
+        for sid, session_data in fetchers.items():
+            if session_data.get('fetcher') == fetcher:
+                session_data['full_history'] = all_data
+                session_data['history_loaded'] = True
+                break
+        
+        result = {
+            'success': True,
+            'months_retrieved': len(all_data),
+            'total_donors': total_donors,
+            'total_amount': total_amount,
+            'total_time': total_time
+        }
+    else:
+        update_job("❌ No data retrieved", 100)
+        result = {'success': False, 'error': 'No data retrieved'}
+    
+    if job_id:
+        background_jobs[job_id].update({
+            'status': 'complete',
+            'progress': 100,
+            'completed': datetime.now().isoformat(),
+            'result': result
+        })
+    
+    return result
+
+# ============================================================================
+# FLASK ROUTES
+# ============================================================================
 
 @app.route('/')
 def home():
@@ -130,7 +306,7 @@ def login():
         'submit': 'Login'
     }
     
-    # Create a fetcher (like the desktop version)
+    # Create a fetcher
     fetcher = WorkingBIMIFetcher()
     
     # Try login
@@ -141,32 +317,33 @@ def login():
         fetchers[session_id] = {
             'fetcher': fetcher,
             'credentials': credentials,
-            'created': datetime.now()
+            'created': datetime.now(),
+            'history_loaded': False
         }
         
-        # Immediately fetch current month data (same session!)
-        current_date = datetime.now()
-        report_month = current_date.replace(day=1) - timedelta(days=1)
+        # Immediately fetch current month data
+        current_date = datetime.now().replace(day=1)
+        report_date = current_date - relativedelta(months=1)
         
         data = fetcher.fetch_month_data(
-            report_month.year,
-            report_month.month,
+            report_date.year,
+            report_date.month,
             credentials
         )
         
         if data:
             donors, totals = data
-            # Store the data
             fetchers[session_id]['current_data'] = {
                 'donors': donors,
                 'totals': totals,
-                'report_month': report_month.strftime('%B %Y')
+                'report_month': report_date.strftime('%B %Y')
             }
             
-            # Redirect to dashboard
             return redirect(url_for('dashboard'))
+        else:
+            return render_template('login.html', error='Login succeeded but could not fetch data')
     
-    return "Login failed", 401
+    return render_template('login.html', error='Login failed - check credentials')
 
 @app.route('/dashboard')
 def dashboard():
@@ -184,60 +361,180 @@ def dashboard():
     totals = data['totals']
     report_month = data['report_month']
     
+    # Check if we have full history
+    has_full_history = session_data.get('history_loaded', False)
+    
+    # Get history summary if available
+    history_summary = []
+    if has_full_history and 'full_history' in session_data:
+        for month_data in session_data['full_history']:
+            history_summary.append({
+                'month': month_data['month'],
+                'total_amount': month_data['total_amount'],
+                'net_cash': month_data['net_cash'],
+                'donor_count': month_data['donor_count']
+            })
+    
     return render_template('dashboard.html',
                          donors=donors,
                          totals=totals,
                          report_month=report_month,
-                         donor_count=len(donors))
+                         donor_count=len(donors),
+                         has_full_history=has_full_history,
+                         history_summary=history_summary)
 
-@app.route('/load-history')
-def load_history():
-    """Background loading of history - uses the SAME fetcher"""
+@app.route('/api/load-full-year', methods=['POST'])
+def load_full_year():
+    """Start background job to load 12 months using PROVEN strategy"""
     session_id = session.get('session_id')
     if not session_id or session_id not in fetchers:
-        return jsonify({'status': 'error'})
+        return jsonify({'error': 'Not logged in'}), 401
+    
+    # Create unique job ID
+    job_id = f"{session_id}_{int(time.time())}"
     
     session_data = fetchers[session_id]
     fetcher = session_data['fetcher']
     credentials = session_data['credentials']
     
-    # Load a few months of history in background
-    current_date = datetime.now()
-    history = []
+    # Start background thread
+    def run_fetch():
+        fetch_12_months_proven(fetcher, credentials, job_id)
     
-    for i in range(1, 4):  # Just 3 months for now
-        month_date = current_date.replace(day=1) - timedelta(days=1)
-        for _ in range(i):
-            if month_date.month == 1:
-                month_date = month_date.replace(year=month_date.year-1, month=12)
-            else:
-                month_date = month_date.replace(month=month_date.month-1)
+    thread = threading.Thread(target=run_fetch)
+    thread.daemon = True
+    thread.start()
+    
+    return jsonify({
+        'success': True,
+        'job_id': job_id,
+        'message': 'Started loading 12 months of data (Proven Strategy)'
+    })
+
+@app.route('/api/job-status/<job_id>')
+def job_status(job_id):
+    """Check status of background job"""
+    if job_id in background_jobs:
+        job = background_jobs[job_id]
+        return jsonify({
+            'status': job['status'],
+            'progress': job['progress'],
+            'messages': job.get('messages', [])[-10:],  # Last 10 messages
+            'result': job.get('result'),
+            'started': job.get('started'),
+            'completed': job.get('completed')
+        })
+    return jsonify({'error': 'Job not found'}), 404
+
+@app.route('/api/get-full-history')
+def get_full_history():
+    """Get complete stored history data"""
+    session_id = session.get('session_id')
+    if not session_id or session_id not in fetchers:
+        return jsonify({'error': 'Not logged in'}), 401
+    
+    session_data = fetchers[session_id]
+    
+    if 'full_history' in session_data:
+        return jsonify({
+            'success': True,
+            'history': session_data['full_history'],
+            'total_months': len(session_data['full_history'])
+        })
+    
+    return jsonify({'success': False, 'message': 'No history loaded yet'})
+
+@app.route('/api/test-boundary')
+def test_boundary():
+    """Quick synchronous test of 12-month fetch"""
+    session_id = session.get('session_id')
+    if not session_id or session_id not in fetchers:
+        return jsonify({'error': 'Not logged in'}), 401
+    
+    session_data = fetchers[session_id]
+    fetcher = session_data['fetcher']
+    credentials = session_data['credentials']
+    
+    # Run synchronous test
+    print("🧪 Running boundary test...")
+    all_data = []
+    current_date = datetime.now().replace(day=1)
+    report_date = current_date - relativedelta(months=1)
+    
+    for month_num in range(12):
+        target_date = report_date - relativedelta(months=month_num)
+        year, month = target_date.year, target_date.month
         
-        data = fetcher.fetch_month_data(
-            month_date.year,
-            month_date.month,
-            credentials
-        )
+        print(f"  [{month_num+1}/12] {target_date.strftime('%B %Y')}: ", end="")
+        
+        data = fetcher.fetch_month_data(year, month, credentials)
         
         if data:
             donors, totals = data
-            history.append({
-                'month': month_date.strftime('%B %Y'),
+            all_data.append({
+                'month': target_date.strftime('%B %Y'),
                 'donors': len(donors),
                 'total': totals.get('total_donations', 0)
             })
+            print(f"✅ {len(donors)} donors")
+        else:
+            print(f"❌ Failed")
         
-        time.sleep(1)  # Be nice to BIMI
+        if month_num < 11:
+            time.sleep(1.5)
     
-    return jsonify({'status': 'complete', 'history': history})
+    return jsonify({
+        'success': True,
+        'results': all_data,
+        'retrieved': len(all_data)
+    })
 
 @app.route('/logout')
 def logout():
     session_id = session.get('session_id')
     if session_id in fetchers:
         del fetchers[session_id]
+    
+    # Clean up old background jobs
+    current_time = time.time()
+    for job_id in list(background_jobs.keys()):
+        job = background_jobs[job_id]
+        if 'started' in job:
+            try:
+                job_time = datetime.fromisoformat(job['started']).timestamp()
+                if current_time - job_time > 300:  # 5 minutes old
+                    del background_jobs[job_id]
+            except:
+                pass
+    
     session.clear()
     return redirect(url_for('home'))
+
+# ============================================================================
+# DEBUG ENDPOINTS
+# ============================================================================
+
+@app.route('/api/debug-next-month')
+def debug_next_month():
+    """Debug month calculation"""
+    current_date = datetime.now().replace(day=1)
+    report_date = current_date - relativedelta(months=1)
+    
+    months = []
+    for i in range(12):
+        target_date = report_date - relativedelta(months=i)
+        months.append({
+            'index': i,
+            'date': target_date.strftime('%B %Y'),
+            'year': target_date.year,
+            'month': target_date.month
+        })
+    
+    return jsonify({'months': months})
+
+# ============================================================================
+# MAIN
+# ============================================================================
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
