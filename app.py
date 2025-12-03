@@ -364,16 +364,38 @@ def dashboard():
     # Check if we have full history
     has_full_history = session_data.get('history_loaded', False)
     
-    # Get history summary if available
+    # Prepare history summary if available
     history_summary = []
+    total_amount = 0
+    total_donors = 0
+    avg_amount = 0
+    avg_donors = 0
+    max_amount = 0
+    min_amount = float('inf')
+    
     if has_full_history and 'full_history' in session_data:
+        # Prepare data for chart
         for month_data in session_data['full_history']:
+            amount = month_data['total_amount']
+            donor_count = month_data['donor_count']
+            
             history_summary.append({
                 'month': month_data['month'],
-                'total_amount': month_data['total_amount'],
-                'net_cash': month_data['net_cash'],
-                'donor_count': month_data['donor_count']
+                'total_amount': amount,
+                'net_cash': month_data.get('net_cash', 0),
+                'donor_count': donor_count
             })
+            
+            # Calculate statistics
+            total_amount += amount
+            total_donors += donor_count
+            max_amount = max(max_amount, amount)
+            min_amount = min(min_amount, amount)
+        
+        # Calculate averages
+        if history_summary:
+            avg_amount = total_amount / len(history_summary)
+            avg_donors = total_donors / len(history_summary)
     
     return render_template('dashboard.html',
                          donors=donors,
@@ -381,7 +403,13 @@ def dashboard():
                          report_month=report_month,
                          donor_count=len(donors),
                          has_full_history=has_full_history,
-                         history_summary=history_summary)
+                         history_summary=history_summary,
+                         total_amount=total_amount,
+                         total_donors=total_donors,
+                         avg_amount=avg_amount,
+                         avg_donors=avg_donors,
+                         max_amount=max_amount,
+                         min_amount=min_amount if min_amount != float('inf') else 0)
 
 @app.route('/api/load-full-year', methods=['POST'])
 def load_full_year():
@@ -539,3 +567,4 @@ def debug_next_month():
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port, debug=True)
+
