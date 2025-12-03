@@ -2,10 +2,11 @@
 <html>
 <head>
     <title>BIMI Dashboard</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #f5f5f5; color: #333; }
-        .container { max-width: 1200px; margin: 0 auto; padding: 20px; }
+        .container { max-width: 1400px; margin: 0 auto; padding: 20px; }
         
         .header { 
             display: flex; 
@@ -38,6 +39,7 @@
         .btn-success { 
             background: #2ecc71; 
             color: white; 
+            margin-left: 10px;
         }
         
         .btn-success:hover { background: #27ae60; }
@@ -45,6 +47,7 @@
         .btn-logout { 
             background: #e74c3c; 
             color: white; 
+            margin-left: 10px;
         }
         
         .btn-logout:hover { background: #c0392b; }
@@ -78,12 +81,107 @@
             color: #2c3e50;
         }
         
+        /* Chart Section */
+        .chart-section {
+            background: white;
+            border-radius: 10px;
+            padding: 25px;
+            margin: 30px 0;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        
+        .chart-container {
+            position: relative;
+            height: 400px;
+            width: 100%;
+            margin-top: 20px;
+        }
+        
+        .chart-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+        }
+        
+        .chart-header h3 {
+            color: #2c3e50;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        
+        .chart-controls {
+            display: flex;
+            gap: 10px;
+        }
+        
+        .chart-btn {
+            padding: 8px 16px;
+            background: #ecf0f1;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 14px;
+        }
+        
+        .chart-btn.active {
+            background: #3498db;
+            color: white;
+        }
+        
+        /* History Grid */
+        .history-section {
+            background: white;
+            border-radius: 10px;
+            padding: 25px;
+            margin-top: 30px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        
+        .history-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+            gap: 15px;
+            margin-top: 15px;
+        }
+        
+        .history-card {
+            background: #f8f9fa;
+            padding: 15px;
+            border-radius: 8px;
+            border-left: 4px solid #3498db;
+            transition: transform 0.2s;
+        }
+        
+        .history-card:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+        }
+        
+        .history-month { 
+            font-weight: bold; 
+            margin-bottom: 5px; 
+            color: #2c3e50;
+        }
+        .history-amount { 
+            color: #27ae60; 
+            font-weight: bold; 
+            font-size: 18px;
+        }
+        .history-donors { 
+            color: #7f8c8d; 
+            font-size: 14px; 
+            margin-top: 5px;
+        }
+        
+        /* Donors List */
         .donors-list {
             background: white;
             border-radius: 10px;
             padding: 20px;
             box-shadow: 0 2px 10px rgba(0,0,0,0.1);
-            margin-top: 20px;
+            margin-top: 30px;
         }
         
         .donor-card {
@@ -124,11 +222,6 @@
             width: 90%;
             max-height: 80vh;
             overflow-y: auto;
-        }
-        
-        .modal h3 {
-            margin-bottom: 20px;
-            color: #2c3e50;
         }
         
         .progress-container {
@@ -174,41 +267,52 @@
             border-bottom: 1px solid #eee;
         }
         
-        .history-section {
-            background: white;
-            border-radius: 10px;
-            padding: 20px;
-            margin-top: 30px;
-            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        .no-data {
+            text-align: center;
+            padding: 40px;
+            color: #7f8c8d;
+            font-style: italic;
         }
         
-        .history-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
-            gap: 15px;
-            margin-top: 15px;
-        }
-        
-        .history-card {
-            background: #f8f9fa;
+        .stats-bar {
+            display: flex;
+            justify-content: space-between;
+            background: #e3f2fd;
             padding: 15px;
             border-radius: 8px;
-            border-left: 4px solid #3498db;
+            margin-top: 20px;
+            font-size: 16px;
         }
         
-        .history-month { font-weight: bold; margin-bottom: 5px; }
-        .history-amount { color: #27ae60; font-weight: bold; }
-        .history-donors { color: #7f8c8d; font-size: 14px; }
+        .stat-item {
+            text-align: center;
+            flex: 1;
+        }
+        
+        .stat-value {
+            font-weight: bold;
+            font-size: 20px;
+            color: #2c3e50;
+        }
+        
+        .stat-label {
+            font-size: 14px;
+            color: #7f8c8d;
+        }
     </style>
 </head>
 <body>
     <div class="container">
         <div class="header">
-            <h1>BIMI Dashboard</h1>
+            <h1>📊 BIMI Financial Dashboard</h1>
             <div>
                 {% if not has_full_history %}
                 <button id="loadFullYearBtn" class="btn btn-primary">
-                    📊 Load Full Year History
+                    📈 Load 12-Month History
+                </button>
+                {% else %}
+                <button id="refreshChartBtn" class="btn btn-success">
+                    🔄 Refresh Chart
                 </button>
                 {% endif %}
                 <a href="/logout" class="btn btn-logout">Logout</a>
@@ -253,10 +357,47 @@
             </div>
         </div>
         
-        <!-- History Section -->
+        <!-- Chart Section -->
+        {% if has_full_history and history_summary %}
+        <div class="chart-section">
+            <div class="chart-header">
+                <h3>📈 12-Month Donation Trends</h3>
+                <div class="chart-controls">
+                    <button class="chart-btn active" onclick="showChart('amount')">💰 Donations</button>
+                    <button class="chart-btn" onclick="showChart('donors')">👥 Donors</button>
+                    <button class="chart-btn" onclick="showChart('both')">📊 Both</button>
+                </div>
+            </div>
+            
+            <div class="chart-container">
+                <canvas id="donationChart"></canvas>
+            </div>
+            
+            <div class="stats-bar">
+                <div class="stat-item">
+                    <div class="stat-value">${{ "%.2f"|format(avg_amount) }}</div>
+                    <div class="stat-label">Average Monthly</div>
+                </div>
+                <div class="stat-item">
+                    <div class="stat-value">${{ "%.2f"|format(max_amount) }}</div>
+                    <div class="stat-label">Highest Month</div>
+                </div>
+                <div class="stat-item">
+                    <div class="stat-value">${{ "%.2f"|format(min_amount) }}</div>
+                    <div class="stat-label">Lowest Month</div>
+                </div>
+                <div class="stat-item">
+                    <div class="stat-value">{{ "%.1f"|format(avg_donors) }}</div>
+                    <div class="stat-label">Avg Donors/Month</div>
+                </div>
+            </div>
+        </div>
+        {% endif %}
+        
+        <!-- History Grid -->
         {% if has_full_history and history_summary %}
         <div class="history-section">
-            <h3>📈 12-Month History</h3>
+            <h3>📅 Monthly Breakdown</h3>
             <div class="history-grid">
                 {% for month in history_summary %}
                 <div class="history-card">
@@ -266,16 +407,36 @@
                 </div>
                 {% endfor %}
             </div>
-            <div style="margin-top: 20px; padding: 15px; background: #e3f2fd; border-radius: 5px;">
-                <strong>Total 12-Months:</strong> 
-                ${% set total = history_summary|sum(attribute='total_amount') %}{{ "%.2f"|format(total) }} from 
-                {% set total_donors = history_summary|sum(attribute='donor_count') %}{{ total_donors }} donors
+            <div class="stats-bar">
+                <div class="stat-item">
+                    <div class="stat-value">${{ "%.2f"|format(total_amount) }}</div>
+                    <div class="stat-label">Total 12 Months</div>
+                </div>
+                <div class="stat-item">
+                    <div class="stat-value">{{ total_donors }}</div>
+                    <div class="stat-label">Total Donors</div>
+                </div>
+                <div class="stat-item">
+                    <div class="stat-value">${{ "%.2f"|format(total_amount/12) }}</div>
+                    <div class="stat-label">Monthly Average</div>
+                </div>
+                <div class="stat-item">
+                    <div class="stat-value">{{ "%.2f"|format((max_amount-min_amount)/max_amount*100) }}%</div>
+                    <div class="stat-label">Monthly Variance</div>
+                </div>
             </div>
+        </div>
+        {% elif not has_full_history %}
+        <div class="no-data">
+            <h3>📊 No 12-Month History Yet</h3>
+            <p>Click "Load 12-Month History" above to see donation trends and charts.</p>
+            <p><small>This will fetch data for the past 12 months and display interactive charts.</small></p>
         </div>
         {% endif %}
         
-        <h3>Donors ({{ donor_count }})</h3>
+        <!-- Current Month Donors -->
         <div class="donors-list">
+            <h3>Donors for {{ report_month }} ({{ donor_count }})</h3>
             {% for donor in donors %}
             <div class="donor-card">
                 <span class="donor-name">{{ donor.name }}</span>
@@ -287,10 +448,183 @@
     </div>
     
     <script>
+    // Chart configuration
+    let donationChart = null;
+    let chartData = null;
+    
+    {% if has_full_history and history_summary %}
+    // Prepare chart data from Flask template
+    chartData = {
+        months: [{% for month in history_summary %}'{{ month.month.split(" ")[0] }}'{% if not loop.last %}, {% endif %}{% endfor %}].reverse(),
+        amounts: [{% for month in history_summary %}{{ month.total_amount }}{% if not loop.last %}, {% endif %}{% endfor %}].reverse(),
+        donors: [{% for month in history_summary %}{{ month.donor_count }}{% if not loop.last %}, {% endif %}{% endfor %}].reverse(),
+        netCash: [{% for month in history_summary %}{{ month.net_cash }}{% if not loop.last %}, {% endif %}{% endfor %}].reverse()
+    };
+    
+    // Initialize chart
+    function initChart(chartType = 'amount') {
+        const ctx = document.getElementById('donationChart').getContext('2d');
+        
+        // Destroy existing chart
+        if (donationChart) {
+            donationChart.destroy();
+        }
+        
+        // Chart configuration based on type
+        let datasets = [];
+        let yAxisID = 'y';
+        
+        if (chartType === 'amount' || chartType === 'both') {
+            datasets.push({
+                label: 'Gross Donations ($)',
+                data: chartData.amounts,
+                borderColor: '#3498db',
+                backgroundColor: 'rgba(52, 152, 219, 0.1)',
+                borderWidth: 3,
+                fill: true,
+                tension: 0.3,
+                yAxisID: 'y'
+            });
+        }
+        
+        if (chartType === 'donors' || chartType === 'both') {
+            datasets.push({
+                label: 'Number of Donors',
+                data: chartData.donors,
+                borderColor: '#2ecc71',
+                backgroundColor: 'rgba(46, 204, 113, 0.1)',
+                borderWidth: 3,
+                fill: false,
+                tension: 0.3,
+                yAxisID: chartType === 'both' ? 'y1' : 'y'
+            });
+        }
+        
+        donationChart = new Chart(ctx, {
+            type: 'line',
+            data: {
+                labels: chartData.months,
+                datasets: datasets
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                    legend: {
+                        position: 'top',
+                        labels: {
+                            font: {
+                                size: 14
+                            }
+                        }
+                    },
+                    tooltip: {
+                        mode: 'index',
+                        intersect: false,
+                        callbacks: {
+                            label: function(context) {
+                                let label = context.dataset.label || '';
+                                if (label.includes('Donations')) {
+                                    return label + ': $' + context.parsed.y.toFixed(2);
+                                } else if (label.includes('Donors')) {
+                                    return label + ': ' + context.parsed.y;
+                                }
+                                return label;
+                            }
+                        }
+                    }
+                },
+                scales: {
+                    x: {
+                        grid: {
+                            display: false
+                        },
+                        ticks: {
+                            font: {
+                                size: 12
+                            }
+                        }
+                    },
+                    y: {
+                        type: 'linear',
+                        display: true,
+                        position: 'left',
+                        title: {
+                            display: true,
+                            text: chartType === 'donors' ? 'Number of Donors' : 'Amount ($)',
+                            font: {
+                                size: 14,
+                                weight: 'bold'
+                            }
+                        },
+                        ticks: {
+                            callback: function(value) {
+                                if (chartType === 'donors') {
+                                    return value;
+                                }
+                                return '$' + value.toLocaleString();
+                            }
+                        }
+                    },
+                    y1: {
+                        type: 'linear',
+                        display: chartType === 'both',
+                        position: 'right',
+                        title: {
+                            display: true,
+                            text: 'Number of Donors',
+                            font: {
+                                size: 14,
+                                weight: 'bold'
+                            }
+                        },
+                        grid: {
+                            drawOnChartArea: false
+                        }
+                    }
+                },
+                interaction: {
+                    intersect: false,
+                    mode: 'nearest'
+                },
+                animation: {
+                    duration: 1000,
+                    easing: 'easeOutQuart'
+                }
+            }
+        });
+    }
+    
+    // Chart type switcher
+    function showChart(type) {
+        // Update button states
+        document.querySelectorAll('.chart-btn').forEach(btn => {
+            btn.classList.remove('active');
+        });
+        event.target.classList.add('active');
+        
+        // Update chart
+        initChart(type);
+    }
+    
+    // Initialize with donations chart
+    document.addEventListener('DOMContentLoaded', function() {
+        initChart('amount');
+    });
+    {% endif %}
+    
+    // Full year loading
     document.addEventListener('DOMContentLoaded', function() {
         const loadBtn = document.getElementById('loadFullYearBtn');
         if (loadBtn) {
             loadBtn.addEventListener('click', startFullYearLoad);
+        }
+        
+        const refreshBtn = document.getElementById('refreshChartBtn');
+        if (refreshBtn) {
+            refreshBtn.addEventListener('click', function() {
+                location.reload();
+            });
         }
     });
     
